@@ -141,6 +141,60 @@ fn filter_and_sort_commands_refresh_catalog_with_expected_state() {
     assert_eq!(app.filters().country.as_deref(), Some("US"));
 }
 
+#[test]
+fn tab_focus_cycles_search_slash_palette() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let playback = Box::new(MockPlayback::new(log));
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let store = FavoritesStore::new(dir.path().join("favorites.json"));
+    let catalog = Box::new(MockCatalog::new(Arc::new(Mutex::new(Vec::new())), vec![]));
+    let mut app = App::new_with_catalog(playback, store, catalog).expect("create app");
+
+    assert_eq!(app.focus, Focus::Search);
+    app.toggle_focus();
+    assert_eq!(app.focus, Focus::Slash);
+    app.toggle_focus();
+    assert_eq!(app.focus, Focus::Palette);
+    app.toggle_focus();
+    assert_eq!(app.focus, Focus::Search);
+}
+
+#[test]
+fn palette_close_restores_previous_focus() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let playback = Box::new(MockPlayback::new(log));
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let store = FavoritesStore::new(dir.path().join("favorites.json"));
+    let catalog = Box::new(MockCatalog::new(Arc::new(Mutex::new(Vec::new())), vec![]));
+    let mut app = App::new_with_catalog(playback, store, catalog).expect("create app");
+
+    app.focus = Focus::Slash;
+    app.toggle_palette();
+    assert_eq!(app.focus, Focus::Palette);
+    app.close_overlays();
+    assert_eq!(app.focus, Focus::Slash);
+}
+
+#[test]
+fn palette_action_executes_and_updates_status() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let playback = Box::new(MockPlayback::new(log.clone()));
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let store = FavoritesStore::new(dir.path().join("favorites.json"));
+    let catalog = Box::new(MockCatalog::new(Arc::new(Mutex::new(Vec::new())), vec![]));
+    let mut app = App::new_with_catalog(playback, store, catalog).expect("create app");
+
+    app.toggle_palette();
+    app.palette_input = "stop".to_string();
+    app.submit_current_input().expect("execute palette command");
+
+    assert_eq!(
+        log.lock().expect("lock log").as_slice(),
+        &["stop".to_string()]
+    );
+    assert_eq!(app.status_message, "Playback stopped");
+}
+
 fn sample_station() -> Station {
     Station {
         id: "station-1".to_string(),
