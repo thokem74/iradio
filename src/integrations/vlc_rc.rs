@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use std::io::Write;
 use std::net::TcpStream;
 
-use super::playback::{PlaybackController, PlaybackState};
+use super::playback::{volume_percent_to_vlc_scale, PlaybackController, PlaybackState};
 
 pub struct VlcRcController {
     host: String,
@@ -38,6 +38,12 @@ impl PlaybackController for VlcRcController {
     fn play(&mut self, stream_url: &str) -> Result<()> {
         self.send(&format!("add {stream_url}"))?;
         self.state = PlaybackState::Playing;
+        Ok(())
+    }
+
+    fn set_volume(&mut self, value: u8) -> Result<()> {
+        let vlc_volume = volume_percent_to_vlc_scale(value);
+        self.send(&format!("volume {vlc_volume}"))?;
         Ok(())
     }
 
@@ -138,5 +144,28 @@ mod tests {
             .expect_err("stop from stopped should fail");
         assert!(err.to_string().contains("already stopped"));
         assert_eq!(controller.state(), PlaybackState::Stopped);
+    }
+
+    #[test]
+    fn set_volume_sends_volume_command() {
+        let listener = match TcpListener::bind(("127.0.0.1", 0)) {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(err) => panic!("bind listener: {err}"),
+        };
+        let port = listener.local_addr().expect("read local addr").port();
+
+        let handle = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("accept socket");
+            let mut buf = [0_u8; 128];
+            let n = socket.read(&mut buf).expect("read command");
+            String::from_utf8_lossy(&buf[..n]).to_string()
+        });
+
+        let mut controller = VlcRcController::new("127.0.0.1", port);
+        controller.set_volume(100).expect("send volume command");
+
+        let payload = handle.join().expect("join thread");
+        assert_eq!(payload, "volume 256\n");
     }
 }

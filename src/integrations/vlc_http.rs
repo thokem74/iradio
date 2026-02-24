@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
 
-use super::playback::{PlaybackController, PlaybackState};
+use super::playback::{volume_percent_to_vlc_scale, PlaybackController, PlaybackState};
 
 pub struct VlcHttpController {
     client: Client,
@@ -21,15 +21,15 @@ impl VlcHttpController {
         }
     }
 
-    fn send_command(&self, command: &str, value: Option<&str>) -> Result<()> {
+    fn send_command(&self, command: &str, value: Option<(&str, &str)>) -> Result<()> {
         let mut request = self
             .client
             .get(format!("{}/requests/status.json", self.base_url))
             .basic_auth("", Some(self.password.clone()))
             .query(&[("command", command)]);
 
-        if let Some(stream_url) = value {
-            request = request.query(&[("input", stream_url)]);
+        if let Some((key, val)) = value {
+            request = request.query(&[(key, val)]);
         }
 
         let response = request.send().with_context(|| {
@@ -55,8 +55,14 @@ impl VlcHttpController {
 
 impl PlaybackController for VlcHttpController {
     fn play(&mut self, stream_url: &str) -> Result<()> {
-        self.send_command("in_play", Some(stream_url))?;
+        self.send_command("in_play", Some(("input", stream_url)))?;
         self.state = PlaybackState::Playing;
+        Ok(())
+    }
+
+    fn set_volume(&mut self, value: u8) -> Result<()> {
+        let vlc_volume = volume_percent_to_vlc_scale(value).to_string();
+        self.send_command("volume", Some(("val", &vlc_volume)))?;
         Ok(())
     }
 

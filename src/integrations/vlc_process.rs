@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 
-use super::playback::{PlaybackController, PlaybackState};
+use super::playback::{volume_percent_to_vlc_scale, PlaybackController, PlaybackState};
 
 const SHUTDOWN_WAIT: Duration = Duration::from_millis(500);
 const SHUTDOWN_POLL: Duration = Duration::from_millis(50);
@@ -130,6 +130,13 @@ impl PlaybackController for VlcProcessController {
         }
         self.send_command(&format!("add {validated}"))?;
         self.state = PlaybackState::Playing;
+        Ok(())
+    }
+
+    fn set_volume(&mut self, value: u8) -> Result<()> {
+        self.spawn_if_needed()?;
+        let vlc_volume = volume_percent_to_vlc_scale(value);
+        self.send_command(&format!("volume {vlc_volume}"))?;
         Ok(())
     }
 

@@ -12,6 +12,7 @@ pub enum PlayTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlashCommand {
     Play(PlayTarget),
+    Volume(u8),
     Stop,
     Pause,
     Resume,
@@ -50,6 +51,21 @@ impl SlashCommand {
                 } else {
                     Ok(Self::Play(PlayTarget::Query(value)))
                 }
+            }
+            "volume" => {
+                let value = parts
+                    .next()
+                    .ok_or_else(|| anyhow!("usage: /volume <0-100>"))?;
+                if parts.next().is_some() {
+                    return Err(anyhow!("usage: /volume <0-100>"));
+                }
+                let value = value
+                    .parse::<u8>()
+                    .map_err(|_| anyhow!("volume must be an integer"))?;
+                if value > 100 {
+                    return Err(anyhow!("volume must be between 0 and 100"));
+                }
+                Ok(Self::Volume(value))
             }
             "stop" => Ok(Self::Stop),
             "pause" => Ok(Self::Pause),

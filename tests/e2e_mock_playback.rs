@@ -29,6 +29,14 @@ impl PlaybackController for ScriptedPlayback {
         Ok(())
     }
 
+    fn set_volume(&mut self, value: u8) -> Result<()> {
+        self.events
+            .lock()
+            .expect("lock events")
+            .push(format!("volume:{value}"));
+        Ok(())
+    }
+
     fn stop(&mut self) -> Result<()> {
         self.events
             .lock()
@@ -88,7 +96,14 @@ fn e2e_mock_user_flow_search_play_pause_resume_stop_quit() {
         .expect("refresh search results from catalog");
 
     app.focus = Focus::Slash;
-    for cmd in ["/play selected", "/pause", "/resume", "/stop", "/quit"] {
+    for cmd in [
+        "/play selected",
+        "/volume 30",
+        "/pause",
+        "/resume",
+        "/stop",
+        "/quit",
+    ] {
         app.slash_input = cmd.to_string();
         app.submit_current_input().expect("execute command");
     }
@@ -98,6 +113,7 @@ fn e2e_mock_user_flow_search_play_pause_resume_stop_quit() {
         calls,
         vec![
             "play:https://npr-ice.streamguys1.com/live.mp3",
+            "volume:30",
             "pause",
             "resume",
             "stop",
