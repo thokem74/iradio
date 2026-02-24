@@ -3,8 +3,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::domain::models::Station;
-
 #[derive(Debug, Clone)]
 pub struct FavoritesStore {
     path: PathBuf,
@@ -17,7 +15,7 @@ impl FavoritesStore {
         }
     }
 
-    pub fn load(&self) -> Result<Vec<Station>> {
+    pub fn load(&self) -> Result<Vec<String>> {
         if !self.path.exists() {
             return Ok(Vec::new());
         }
@@ -25,21 +23,33 @@ impl FavoritesStore {
         let content = fs::read_to_string(&self.path)
             .with_context(|| format!("failed to read favorites file: {}", self.path.display()))?;
 
-        let favorites = serde_json::from_str::<Vec<Station>>(&content)
-            .with_context(|| format!("failed to parse favorites file: {}", self.path.display()))?;
+        if let Ok(ids) = serde_json::from_str::<Vec<String>>(&content) {
+            return Ok(ids);
+        }
 
-        Ok(favorites)
+        #[derive(serde::Deserialize)]
+        struct LegacyFavoriteStation {
+            station_uuid: Option<String>,
+            id: Option<String>,
+        }
+        let legacy = serde_json::from_str::<Vec<LegacyFavoriteStation>>(&content)
+            .with_context(|| format!("failed to parse favorites file: {}", self.path.display()))?;
+        let ids = legacy
+            .into_iter()
+            .filter_map(|entry| entry.station_uuid.or(entry.id))
+            .collect();
+
+        Ok(ids)
     }
 
-    pub fn save(&self, stations: &[Station]) -> Result<()> {
+    pub fn save(&self, ids: &[String]) -> Result<()> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).with_context(|| {
                 format!("failed to create favorites directory: {}", parent.display())
             })?;
         }
 
-        let body =
-            serde_json::to_string_pretty(stations).context("failed to serialize favorites")?;
+        let body = serde_json::to_string_pretty(ids).context("failed to serialize favorites")?;
         fs::write(&self.path, body)
             .with_context(|| format!("failed to write favorites file: {}", self.path.display()))?;
 

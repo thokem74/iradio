@@ -1,16 +1,17 @@
-use anyhow::{anyhow, Context, Result};
+use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
+
+use anyhow::{anyhow, Context, Result};
 use tracing::warn;
 
-use crate::domain::commands::SlashCommand;
+use crate::domain::commands::{PlayTarget, SlashCommand};
 use crate::domain::models::{Station, StationFilters, StationSearchQuery, StationSort};
 use crate::domain::palette::{fuzzy_filter, PaletteItem};
 use crate::integrations::playback::{PlaybackController, PlaybackState};
 use crate::integrations::station_catalog::{RadioBrowserCatalog, StaticCatalog, StationCatalog};
-use crate::integrations::vlc_http::VlcHttpController;
-use crate::integrations::vlc_rc::VlcRcController;
-use crate::storage::config::{PlaybackMode, RuntimeConfig};
+use crate::integrations::vlc_process::VlcProcessController;
+use crate::storage::config::RuntimeConfig;
 use crate::storage::favorites::FavoritesStore;
 use crate::ui::Tui;
 
@@ -31,6 +32,21 @@ impl Focus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultsSource {
+    Stations,
+    Favorites,
+}
+
+impl ResultsSource {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Stations => "Stations",
+            Self::Favorites => "Favorites",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct AppDefaults {
     pub sort: StationSort,
@@ -46,8 +62,13 @@ pub struct App {
     pub slash_input: String,
     pub palette_input: String,
     focus_before_palette: Focus,
+    search_dirty: bool,
+    results_source: ResultsSource,
+    palette_selected_index: usize,
     filtered: Vec<Station>,
-    favorites: Vec<Station>,
+    favorites: Vec<String>,
+    favorites_view: Vec<Station>,
+    station_cache: HashMap<String, Station>,
     filters: StationFilters,
     sort: StationSort,
     now_playing: Option<Station>,
@@ -101,8 +122,13 @@ impl App {
             slash_input: String::new(),
             palette_input: String::new(),
             focus_before_palette: Focus::Search,
+            search_dirty: false,
+            results_source: ResultsSource::Stations,
+            palette_selected_index: 0,
             filtered: Vec::new(),
             favorites,
+            favorites_view: Vec::new(),
+            station_cache: HashMap::new(),
             filters: defaults.filters,
             sort: defaults.sort,
             now_playing: None,
@@ -122,11 +148,14 @@ impl App {
     }
 
     pub fn visible_stations(&self) -> &[Station] {
-        &self.filtered
+        match self.results_source {
+            ResultsSource::Stations => &self.filtered,
+            ResultsSource::Favorites => &self.favorites_view,
+        }
     }
 
     pub fn selected_station(&self) -> Option<&Station> {
-        self.filtered.get(self.selected_index)
+        self.visible_stations().get(self.selected_index)
     }
 
     pub fn details_station(&self) -> Option<&Station> {
@@ -152,7 +181,7 @@ impl App {
     }
 
     pub fn is_favorite(&self, station: &Station) -> bool {
-        self.favorites.iter().any(|s| s.id == station.id)
+        self.favorites.iter().any(|id| id == &station.station_uuid)
     }
 
     pub fn current_input(&self) -> String {
@@ -161,6 +190,26 @@ impl App {
             Focus::Slash => self.slash_input.clone(),
             Focus::Palette => self.palette_input.clone(),
         }
+    }
+
+    pub fn results_source_label(&self) -> &'static str {
+        self.results_source.label()
+    }
+
+    pub fn search_dirty(&self) -> bool {
+        self.search_dirty
+    }
+
+    pub fn palette_selected_index(&self) -> usize {
+        self.palette_selected_index
+    }
+
+    pub fn palette_preview(&self, limit: usize) -> Vec<PaletteItem> {
+        let mut results = self.palette_results();
+        if results.len() > limit {
+            results.truncate(limit);
+        }
+        results
     }
 
     pub fn toggle_focus(&mut self) {
@@ -172,6 +221,15 @@ impl App {
         self.set_focus(next_focus);
     }
 
+    pub fn toggle_focus_backward(&mut self) {
+        let prev_focus = match self.focus {
+            Focus::Search => Focus::Palette,
+            Focus::Slash => Focus::Search,
+            Focus::Palette => Focus::Slash,
+        };
+        self.set_focus(prev_focus);
+    }
+
     pub fn toggle_palette(&mut self) {
         if self.focus == Focus::Palette {
             self.focus = self.focus_before_palette;
@@ -179,6 +237,7 @@ impl App {
         } else {
             self.focus_before_palette = self.focus;
             self.focus = Focus::Palette;
+            self.palette_selected_index = 0;
             self.status_message = "Focus: Palette".to_string();
         }
     }
@@ -198,6 +257,7 @@ impl App {
         if self.focus == Focus::Palette {
             self.focus = self.focus_before_palette;
             self.palette_input.clear();
+            self.palette_selected_index = 0;
             self.status_message = format!("Focus: {}", self.focus.label());
         }
     }
@@ -206,9 +266,13 @@ impl App {
         match self.focus {
             Focus::Search => {
                 self.search_input.push(c);
+                self.search_dirty = true;
             }
             Focus::Slash => self.slash_input.push(c),
-            Focus::Palette => self.palette_input.push(c),
+            Focus::Palette => {
+                self.palette_input.push(c);
+                self.palette_selected_index = 0;
+            }
         }
     }
 
@@ -216,12 +280,14 @@ impl App {
         match self.focus {
             Focus::Search => {
                 self.search_input.pop();
+                self.search_dirty = true;
             }
             Focus::Slash => {
                 self.slash_input.pop();
             }
             Focus::Palette => {
                 self.palette_input.pop();
+                self.palette_selected_index = 0;
             }
         }
     }
@@ -229,13 +295,19 @@ impl App {
     pub fn submit_current_input(&mut self) -> Result<()> {
         match self.focus {
             Focus::Search => {
-                self.refresh_stations()?;
-                self.status_message = format!(
-                    "Search refreshed ({} results, sort={})",
-                    self.filtered.len(),
-                    sort_label(self.sort)
-                );
-                Ok(())
+                if self.search_dirty {
+                    self.results_source = ResultsSource::Stations;
+                    self.refresh_stations()?;
+                    self.search_dirty = false;
+                    self.status_message = format!(
+                        "Search refreshed ({} results, sort={})",
+                        self.filtered.len(),
+                        sort_label(self.sort)
+                    );
+                    Ok(())
+                } else {
+                    self.execute_command(SlashCommand::Play(PlayTarget::Selected))
+                }
             }
             Focus::Slash => {
                 let cmd = self.slash_input.clone();
@@ -243,33 +315,137 @@ impl App {
                 self.execute_slash(&cmd)
             }
             Focus::Palette => {
-                let selected = self
-                    .palette_results()
-                    .first()
+                let results = self.palette_results();
+                let selected = results
+                    .get(self.palette_selected_index)
                     .cloned()
                     .ok_or_else(|| anyhow!("no command matched palette input"))?;
                 self.focus = self.focus_before_palette;
                 self.palette_input.clear();
+                self.palette_selected_index = 0;
                 self.execute_palette_action(&selected.action)
             }
         }
     }
 
     pub fn select_next(&mut self) {
-        if self.filtered.is_empty() {
+        if self.focus == Focus::Palette {
+            let len = self.palette_results().len();
+            if len == 0 {
+                return;
+            }
+            self.palette_selected_index = (self.palette_selected_index + 1) % len;
             return;
         }
-        self.selected_index = (self.selected_index + 1) % self.filtered.len();
+
+        let len = self.visible_stations().len();
+        if len == 0 {
+            return;
+        }
+        self.selected_index = (self.selected_index + 1) % len;
     }
 
     pub fn select_previous(&mut self) {
-        if self.filtered.is_empty() {
+        if self.focus == Focus::Palette {
+            let len = self.palette_results().len();
+            if len == 0 {
+                return;
+            }
+            if self.palette_selected_index == 0 {
+                self.palette_selected_index = len - 1;
+            } else {
+                self.palette_selected_index -= 1;
+            }
+            return;
+        }
+
+        let len = self.visible_stations().len();
+        if len == 0 {
             return;
         }
         if self.selected_index == 0 {
-            self.selected_index = self.filtered.len() - 1;
+            self.selected_index = len - 1;
         } else {
             self.selected_index -= 1;
+        }
+    }
+
+    pub fn toggle_selected_favorite(&mut self) -> Result<()> {
+        let Some(station) = self.selected_station().cloned() else {
+            return Err(anyhow!("no station selected"));
+        };
+        if self.is_favorite(&station) {
+            self.favorites.retain(|id| id != &station.station_uuid);
+            self.favorites_store.save(&self.favorites)?;
+            self.refresh_favorites_view();
+            self.clamp_selected_index();
+            self.status_message = format!("Unfavorited {}", station.name);
+        } else {
+            self.favorites.push(station.station_uuid.clone());
+            self.favorites_store.save(&self.favorites)?;
+            self.refresh_favorites_view();
+            self.status_message = format!("Favorited {}", station.name);
+        }
+        Ok(())
+    }
+
+    pub fn stop_playback(&mut self) -> Result<()> {
+        self.execute_command(SlashCommand::Stop)
+    }
+
+    pub fn pause_or_resume(&mut self) -> Result<()> {
+        if self.playback_state() == PlaybackState::Paused {
+            self.execute_command(SlashCommand::Resume)
+        } else {
+            self.execute_command(SlashCommand::Pause)
+        }
+    }
+
+    pub fn request_quit(&mut self) -> Result<()> {
+        self.execute_command(SlashCommand::Quit)
+    }
+
+    pub fn shutdown_playback(&mut self) -> Result<()> {
+        self.playback.shutdown()
+    }
+
+    fn cache_station(&mut self, station: &Station) {
+        self.station_cache
+            .insert(station.station_uuid.clone(), station.clone());
+    }
+
+    fn cache_stations(&mut self, stations: &[Station]) {
+        for station in stations {
+            self.cache_station(station);
+        }
+    }
+
+    fn refresh_favorites_view(&mut self) -> usize {
+        self.favorites_view.clear();
+        let mut unresolved = 0usize;
+
+        if let Some(now_playing) = &self.now_playing {
+            self.station_cache
+                .insert(now_playing.station_uuid.clone(), now_playing.clone());
+        }
+
+        for id in &self.favorites {
+            if let Some(station) = self.station_cache.get(id) {
+                self.favorites_view.push(station.clone());
+            } else {
+                unresolved += 1;
+            }
+        }
+
+        unresolved
+    }
+
+    fn clamp_selected_index(&mut self) {
+        let len = self.visible_stations().len();
+        if len == 0 {
+            self.selected_index = 0;
+        } else if self.selected_index >= len {
+            self.selected_index = len - 1;
         }
     }
 
@@ -290,10 +466,10 @@ impl App {
                 )
             })?;
 
+        self.cache_stations(&stations);
         self.filtered = stations;
-        if self.selected_index >= self.filtered.len() {
-            self.selected_index = 0;
-        }
+        self.refresh_favorites_view();
+        self.clamp_selected_index();
         Ok(())
     }
 
@@ -304,10 +480,11 @@ impl App {
 
     fn execute_palette_action(&mut self, action: &str) -> Result<()> {
         let command = match action {
-            "play" => SlashCommand::Play("selected".to_string()),
+            "play" => SlashCommand::Play(PlayTarget::Selected),
             "stop" => SlashCommand::Stop,
             "pause" => SlashCommand::Pause,
             "resume" => SlashCommand::Resume,
+            "favorites" => SlashCommand::Favorites,
             "favorite" => SlashCommand::Favorite,
             "unfavorite" => SlashCommand::Unfavorite,
             "clear-filters" => SlashCommand::ClearFilters,
@@ -323,22 +500,40 @@ impl App {
         self.execute_command(command)
     }
 
+    fn station_for_play_target(&self, target: PlayTarget) -> Result<Station> {
+        match target {
+            PlayTarget::Selected => self
+                .selected_station()
+                .cloned()
+                .ok_or_else(|| anyhow!("no station selected")),
+            PlayTarget::Index(index) => {
+                let stations = self.visible_stations();
+                if stations.is_empty() {
+                    return Err(anyhow!("no stations available to play"));
+                }
+                let idx = index - 1;
+                stations
+                    .get(idx)
+                    .cloned()
+                    .ok_or_else(|| anyhow!("index out of range: valid 1..{}", stations.len()))
+            }
+            PlayTarget::Query(target) => self
+                .visible_stations()
+                .iter()
+                .find(|s| s.name.to_lowercase().contains(&target.to_lowercase()))
+                .cloned()
+                .ok_or_else(|| anyhow!("no station found for play command")),
+        }
+    }
+
     fn execute_command(&mut self, command: SlashCommand) -> Result<()> {
         match command {
             SlashCommand::Play(target) => {
-                let station = if target == "selected" {
-                    self.selected_station().cloned()
-                } else {
-                    self.filtered
-                        .iter()
-                        .find(|s| s.name.to_lowercase().contains(&target.to_lowercase()))
-                        .cloned()
-                }
-                .ok_or_else(|| anyhow!("no station found for play command"))?;
-
-                if let Err(err) = self.playback.play(&station.stream_url) {
+                let station = self.station_for_play_target(target)?;
+                if let Err(err) = self.playback.play(&station.url_resolved) {
                     self.status_message = format!("Playback play failed: {err}");
                 } else {
+                    self.cache_station(&station);
                     self.now_playing = Some(station.clone());
                     self.status_message = format!("Playing {}", station.name);
                 }
@@ -367,35 +562,59 @@ impl App {
             }
             SlashCommand::Search(query) => {
                 self.search_input = query;
+                self.results_source = ResultsSource::Stations;
                 self.refresh_stations()?;
+                self.search_dirty = false;
                 self.status_message = format!("Search applied ({} results)", self.filtered.len());
             }
             SlashCommand::Filter(filters) => {
                 self.filters = filters;
+                self.results_source = ResultsSource::Stations;
                 self.refresh_stations()?;
+                self.search_dirty = false;
                 self.status_message = format!("Filters applied ({} results)", self.filtered.len());
             }
             SlashCommand::ClearFilters => {
                 self.filters = StationFilters::default();
+                self.results_source = ResultsSource::Stations;
                 self.refresh_stations()?;
+                self.search_dirty = false;
                 self.status_message = format!("Filters cleared ({} results)", self.filtered.len());
             }
             SlashCommand::Sort(sort) => {
                 self.sort = sort;
+                self.results_source = ResultsSource::Stations;
                 self.refresh_stations()?;
+                self.search_dirty = false;
                 self.status_message = format!(
                     "Sort applied: {} ({} results)",
                     sort_label(sort),
                     self.filtered.len()
                 );
             }
+            SlashCommand::Favorites => {
+                self.results_source = ResultsSource::Favorites;
+                let unresolved = self.refresh_favorites_view();
+                self.clamp_selected_index();
+                if unresolved > 0 {
+                    self.status_message = format!(
+                        "Showing favorites ({}) | {} favorites not in current cache; search to hydrate",
+                        self.favorites_view.len(),
+                        unresolved
+                    );
+                } else {
+                    self.status_message =
+                        format!("Showing favorites ({})", self.favorites_view.len());
+                }
+            }
             SlashCommand::Favorite => {
                 let Some(station) = self.selected_station().cloned() else {
                     return Err(anyhow!("no station selected"));
                 };
                 if !self.is_favorite(&station) {
-                    self.favorites.push(station.clone());
+                    self.favorites.push(station.station_uuid.clone());
                     self.favorites_store.save(&self.favorites)?;
+                    self.refresh_favorites_view();
                 }
                 self.status_message = format!("Favorited {}", station.name);
             }
@@ -403,15 +622,22 @@ impl App {
                 let Some(station) = self.selected_station().cloned() else {
                     return Err(anyhow!("no station selected"));
                 };
-                self.favorites.retain(|s| s.id != station.id);
+                self.favorites.retain(|id| id != &station.station_uuid);
                 self.favorites_store.save(&self.favorites)?;
+                self.refresh_favorites_view();
+                self.clamp_selected_index();
                 self.status_message = format!("Unfavorited {}", station.name);
             }
             SlashCommand::Quit => {
+                self.playback
+                    .shutdown()
+                    .context("shutdown playback while quitting")?;
                 self.running = false;
+                self.now_playing = None;
+                self.status_message = "Bye".to_string();
             }
             SlashCommand::Help => {
-                self.status_message = "Commands: /play /stop /pause /resume /search /filter /clear-filters /sort /fav /unfav /quit".to_string();
+                self.status_message = "Commands: /play /stop /pause /resume /search /filter /clear-filters /sort /favorites /fav /unfav /quit".to_string();
             }
         }
 
@@ -431,26 +657,11 @@ impl App {
     }
 }
 
-pub fn run() -> Result<()> {
-    init_tracing();
+pub fn run(debug: bool) -> Result<()> {
+    init_tracing(debug);
 
     let config = RuntimeConfig::load().context("load runtime config")?;
-    let playback: Box<dyn PlaybackController> = match config.playback.mode {
-        PlaybackMode::Http => {
-            let base = env::var("IRADIO_VLC_HTTP_BASE")
-                .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
-            let pass = env::var("IRADIO_VLC_HTTP_PASSWORD").unwrap_or_default();
-            Box::new(VlcHttpController::new(base, pass))
-        }
-        PlaybackMode::Rc => {
-            let host = env::var("IRADIO_VLC_RC_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-            let port = env::var("IRADIO_VLC_RC_PORT")
-                .ok()
-                .and_then(|v| v.parse::<u16>().ok())
-                .unwrap_or(4212);
-            Box::new(VlcRcController::new(host, port))
-        }
-    };
+    let playback: Box<dyn PlaybackController> = Box::new(VlcProcessController::new());
 
     let favorites_path = env::var("IRADIO_FAVORITES_PATH")
         .map(PathBuf::from)
@@ -480,19 +691,29 @@ pub fn run() -> Result<()> {
 
     if let Err(err) = tui.run(&mut app) {
         warn!(error = ?err, "tui exited with error");
+        let _ = app.shutdown_playback();
         return Err(err);
     }
 
+    app.shutdown_playback()
+        .context("shutdown playback on exit")?;
     Ok(())
 }
 
-fn init_tracing() {
+fn init_tracing(debug: bool) {
+    let env_filter = tracing_subscriber::EnvFilter::new(resolve_log_filter(debug));
+
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "iradio=info".into()),
-        )
+        .with_env_filter(env_filter)
         .try_init();
+}
+
+fn resolve_log_filter(debug: bool) -> String {
+    if debug {
+        "iradio=debug".to_string()
+    } else {
+        env::var("RUST_LOG").unwrap_or_else(|_| "iradio=info".to_string())
+    }
 }
 
 fn default_palette_items() -> Vec<PaletteItem> {
@@ -500,6 +721,10 @@ fn default_palette_items() -> Vec<PaletteItem> {
         PaletteItem {
             label: "Play selected station".to_string(),
             action: "play".to_string(),
+        },
+        PaletteItem {
+            label: "Show favorites".to_string(),
+            action: "favorites".to_string(),
         },
         PaletteItem {
             label: "Stop playback".to_string(),
@@ -564,43 +789,80 @@ fn sort_label(sort: StationSort) -> &'static str {
 fn default_stations() -> Vec<Station> {
     vec![
         Station {
-            id: "bbc-world-service".to_string(),
+            station_uuid: "bbc-world-service".to_string(),
             name: "BBC World Service".to_string(),
-            stream_url: "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service".to_string(),
+            url_resolved: "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service".to_string(),
             homepage: Some("https://www.bbc.co.uk/worldserviceradio".to_string()),
+            favicon: None,
             tags: vec!["news".to_string(), "world".to_string()],
             country: Some("United Kingdom".to_string()),
+            country_code: Some("GB".to_string()),
             language: Some("English".to_string()),
             codec: Some("MP3".to_string()),
             bitrate: Some(128),
             votes: Some(500),
-            clicks: Some(2_000),
+            click_count: Some(2_000),
         },
         Station {
-            id: "npr".to_string(),
+            station_uuid: "npr".to_string(),
             name: "NPR".to_string(),
-            stream_url: "https://npr-ice.streamguys1.com/live.mp3".to_string(),
+            url_resolved: "https://npr-ice.streamguys1.com/live.mp3".to_string(),
             homepage: Some("https://www.npr.org".to_string()),
+            favicon: None,
             tags: vec!["news".to_string(), "talk".to_string()],
             country: Some("United States".to_string()),
+            country_code: Some("US".to_string()),
             language: Some("English".to_string()),
             codec: Some("MP3".to_string()),
             bitrate: Some(128),
             votes: Some(700),
-            clicks: Some(3_000),
+            click_count: Some(3_000),
         },
         Station {
-            id: "soma-groove".to_string(),
+            station_uuid: "soma-groove".to_string(),
             name: "SomaFM Groove Salad".to_string(),
-            stream_url: "https://ice2.somafm.com/groovesalad-128-mp3".to_string(),
+            url_resolved: "https://ice2.somafm.com/groovesalad-128-mp3".to_string(),
             homepage: Some("https://somafm.com/groovesalad/".to_string()),
+            favicon: None,
             tags: vec!["ambient".to_string(), "electronic".to_string()],
             country: Some("United States".to_string()),
+            country_code: Some("US".to_string()),
             language: Some("English".to_string()),
             codec: Some("MP3".to_string()),
             bitrate: Some(128),
             votes: Some(900),
-            clicks: Some(4_000),
+            click_count: Some(4_000),
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn debug_flag_forces_debug_filter() {
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        env::set_var("RUST_LOG", "iradio=trace");
+        assert_eq!(resolve_log_filter(true), "iradio=debug");
+        env::remove_var("RUST_LOG");
+    }
+
+    #[test]
+    fn rust_log_is_used_when_debug_is_disabled() {
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        env::set_var("RUST_LOG", "iradio=trace");
+        assert_eq!(resolve_log_filter(false), "iradio=trace");
+        env::remove_var("RUST_LOG");
+    }
+
+    #[test]
+    fn default_log_filter_when_rust_log_absent() {
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        env::remove_var("RUST_LOG");
+        assert_eq!(resolve_log_filter(false), "iradio=info");
+    }
 }

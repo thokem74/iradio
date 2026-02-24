@@ -8,6 +8,7 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn load_config_file_applies_defaults() {
+    let _guard = ENV_LOCK.lock().expect("lock env");
     let dir = tempfile::tempdir().expect("create tempdir");
     let config_path = dir.path().join("config.toml");
     std::fs::write(
@@ -34,7 +35,10 @@ fn load_config_file_applies_defaults() {
     )
     .expect("write config");
 
+    let previous = snapshot_env();
+    clear_tracked_env();
     let config = RuntimeConfig::load_from_path(&config_path).expect("load config from path");
+    restore_env(&previous);
     assert_eq!(config.playback.mode, PlaybackMode::Http);
     assert_eq!(
         config.radio_browser.base_url,
@@ -102,6 +106,12 @@ fn snapshot_env() -> Vec<(&'static str, Option<String>)> {
         .into_iter()
         .map(|key| (key, env::var(key).ok()))
         .collect()
+}
+
+fn clear_tracked_env() {
+    for key in tracked_env_keys() {
+        env::remove_var(key);
+    }
 }
 
 fn restore_env(previous: &[(&str, Option<String>)]) {

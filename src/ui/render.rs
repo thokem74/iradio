@@ -20,7 +20,7 @@ pub fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
     let focus_label = app.focus.label();
 
     let header = Paragraph::new(format!(
-        "iradio | Focus: {} | Tab cycle focus | / slash | Ctrl+P palette | Esc close overlay",
+        "iradio | Focus: {} | Tab/Shift+Tab cycle focus | / slash | Ctrl+P palette | Esc close overlay",
         focus_label
     ))
     .style(
@@ -52,7 +52,11 @@ pub fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
         })
         .collect();
 
-    let station_title = format!("Stations ({})", app.visible_stations().len());
+    let station_title = format!(
+        "{} ({})",
+        app.results_source_label(),
+        app.visible_stations().len()
+    );
     let station_block = Block::default()
         .borders(Borders::ALL)
         .title(station_title)
@@ -75,7 +79,7 @@ pub fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
     let details_lines = if let Some(station) = app.details_station() {
         vec![
             Line::from(format!("Name: {}", station.name)),
-            Line::from(format!("URL: {}", station.stream_url)),
+            Line::from(format!("URL: {}", station.url_resolved)),
             Line::from(format!(
                 "Codec: {}",
                 station.codec.as_deref().unwrap_or("unknown")
@@ -101,18 +105,61 @@ pub fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
         ]
     };
 
-    let details = Paragraph::new(Text::from(details_lines))
-        .block(
+    if app.focus == Focus::Palette {
+        let right_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
+            .split(body[1]);
+
+        let details = Paragraph::new(Text::from(details_lines))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Now Playing / Details"),
+            )
+            .wrap(Wrap { trim: true });
+        frame.render_widget(details, right_chunks[0]);
+
+        let palette_items = app.palette_preview(8);
+        let palette_rows: Vec<ListItem<'_>> = palette_items
+            .iter()
+            .enumerate()
+            .map(|(idx, item)| {
+                let style = if idx == app.palette_selected_index() {
+                    Style::default().fg(Color::Black).bg(Color::Green)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(Line::from(item.label.clone())).style(style)
+            })
+            .collect();
+
+        let palette_list = List::new(palette_rows).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Now Playing / Details"),
-        )
-        .wrap(Wrap { trim: true });
-    frame.render_widget(details, body[1]);
+                .title("Palette Actions"),
+        );
+        frame.render_widget(palette_list, right_chunks[1]);
+    } else {
+        let details = Paragraph::new(Text::from(details_lines))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Now Playing / Details"),
+            )
+            .wrap(Wrap { trim: true });
+        frame.render_widget(details, body[1]);
+    }
 
     let input_title = match app.focus {
         Focus::Slash => "Slash Command",
-        Focus::Search => "Search (Enter refreshes from Radio Browser)",
+        Focus::Search => {
+            if app.search_dirty() {
+                "Search (Enter refreshes)"
+            } else {
+                "Search (Enter plays selected)"
+            }
+        }
         Focus::Palette => "Command Palette",
     };
 

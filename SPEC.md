@@ -6,6 +6,15 @@ Last Updated: 2026-02-24
 Project Slug: 2026-02-22_internet-radio-cli
 
 ## Implementation Progress Notes
+- 2026-02-24 (Spec conformance): Added `--debug` CLI flag and deterministic log filter precedence (`--debug` > `RUST_LOG` > `iradio=info`).
+- 2026-02-24 (Spec conformance): Aligned normalized `Station` contract with `station_uuid`, `url_resolved`, `favicon`, `country_code`, and `click_count` (with legacy serde aliases).
+- 2026-02-24 (Spec conformance): Migrated favorites persistence to UUID arrays with dual-read compatibility for legacy station-object files.
+- 2026-02-24 (Spec conformance): Hardened VLC stream URL command path by rejecting control characters and surrounding whitespace.
+- 2026-02-24 (Spec conformance): Switched playback backend to managed VLC subprocess lifecycle (`cvlc` spawn/command/shutdown) with quit-time cleanup.
+- 2026-02-24 (Spec conformance): Added `/favorites` results-mode workflow and `/play <index>` parsing/execution with actionable index bounds errors.
+- 2026-02-24 (Spec conformance): Updated keymap behavior (`q`, `Shift+Tab`, `f`, `s`, `Space`) and Enter semantics (refresh when search is dirty, otherwise play selected).
+- 2026-02-24 (Spec conformance): Added palette action list rendering with keyboard selection and execution.
+- 2026-02-24 (Spec conformance): Added CLI `--help` and `--version` via clap.
 - 2026-02-24 (Phase 3): Added runtime config loading from `~/.config/internet-radio-cli/config.toml` with env-var precedence for playback mode, Radio Browser defaults, and default sort/filters.
 - 2026-02-24 (Phase 3): Hardened VLC RC/HTTP playback adapters with invalid transition checks and actionable error messages for connection/auth failures.
 - 2026-02-24 (Phase 3): Improved focus/palette UX with predictable focus restore/cycle behavior and clearer active-pane feedback in the TUI.

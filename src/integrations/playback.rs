@@ -12,5 +12,6 @@ pub trait PlaybackController: Send {
     fn stop(&mut self) -> Result<()>;
     fn pause(&mut self) -> Result<()>;
     fn resume(&mut self) -> Result<()>;
+    fn shutdown(&mut self) -> Result<()>;
     fn state(&self) -> PlaybackState;
 }

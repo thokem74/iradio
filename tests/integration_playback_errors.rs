@@ -34,6 +34,11 @@ impl PlaybackController for FailingPlayback {
         Err(anyhow!("simulated resume failure"))
     }
 
+    fn shutdown(&mut self) -> Result<()> {
+        self.state = PlaybackState::Stopped;
+        Ok(())
+    }
+
     fn state(&self) -> PlaybackState {
         self.state
     }
@@ -44,17 +49,19 @@ struct StaticOneStationCatalog;
 impl StationCatalog for StaticOneStationCatalog {
     fn search(&self, _query: &StationSearchQuery) -> Result<Vec<Station>> {
         Ok(vec![Station {
-            id: "station-1".to_string(),
+            station_uuid: "station-1".to_string(),
             name: "Sample FM".to_string(),
-            stream_url: "https://example.com/stream".to_string(),
+            url_resolved: "https://example.com/stream".to_string(),
             homepage: None,
+            favicon: None,
             tags: vec!["jazz".to_string()],
             country: Some("US".to_string()),
+            country_code: Some("US".to_string()),
             language: Some("english".to_string()),
             codec: Some("mp3".to_string()),
             bitrate: Some(128),
             votes: Some(10),
-            clicks: Some(11),
+            click_count: Some(11),
         }])
     }
 }

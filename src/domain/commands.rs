@@ -3,8 +3,15 @@ use anyhow::{anyhow, Result};
 use crate::domain::models::{StationFilters, StationSort};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlayTarget {
+    Selected,
+    Index(usize),
+    Query(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlashCommand {
-    Play(String),
+    Play(PlayTarget),
     Stop,
     Pause,
     Resume,
@@ -12,6 +19,7 @@ pub enum SlashCommand {
     Filter(StationFilters),
     ClearFilters,
     Sort(StationSort),
+    Favorites,
     Favorite,
     Unfavorite,
     Quit,
@@ -30,11 +38,17 @@ impl SlashCommand {
 
         match cmd {
             "play" => {
-                let query = parts.collect::<Vec<_>>().join(" ");
-                if query.is_empty() {
-                    Ok(Self::Play("selected".to_string()))
+                let value = parts.collect::<Vec<_>>().join(" ");
+                if value.is_empty() || value.eq_ignore_ascii_case("selected") {
+                    Ok(Self::Play(PlayTarget::Selected))
+                } else if let Ok(index) = value.parse::<usize>() {
+                    if index == 0 {
+                        Err(anyhow!("play index must be >= 1"))
+                    } else {
+                        Ok(Self::Play(PlayTarget::Index(index)))
+                    }
                 } else {
-                    Ok(Self::Play(query))
+                    Ok(Self::Play(PlayTarget::Query(value)))
                 }
             }
             "stop" => Ok(Self::Stop),
@@ -74,6 +88,7 @@ impl SlashCommand {
                 };
                 Ok(Self::Sort(sort))
             }
+            "favorites" => Ok(Self::Favorites),
             "fav" | "favorite" => Ok(Self::Favorite),
             "unfav" | "unfavorite" => Ok(Self::Unfavorite),
             "quit" | "q" => Ok(Self::Quit),

@@ -2,39 +2,41 @@
 
 Rust TUI internet radio client using `ratatui` + `crossterm`.
 
-## Playback Modes
-Use VLC with either remote control mode.
+## Quickstart
+1. Install prerequisites: Rust stable toolchain + VLC (`cvlc` on PATH).
+2. Run: `cargo run` (or build release: `cargo run --release`).
+3. The app starts in interactive mode by default.
 
-### VLC RC (default)
-1. Start VLC with RC enabled (example):
-   `cvlc --extraintf rc --rc-host 127.0.0.1:4212`
-   `cvlc --extraintf rc --rc-host 0.0.0.0:4212`
-2. Run app with defaults or override:
-   - `IRADIO_PLAYBACK_MODE=rc`
-   - `IRADIO_VLC_RC_HOST=127.0.0.1`
-   - `IRADIO_VLC_RC_PORT=4212`
+## Playback Model
+`iradio` now manages a local VLC subprocess directly. It launches:
 
-### VLC HTTP
-1. Start VLC web interface and password.
-2. Run with:
-   - `IRADIO_PLAYBACK_MODE=http`
-   - `IRADIO_VLC_HTTP_BASE=http://127.0.0.1:8080`
-   - `IRADIO_VLC_HTTP_PASSWORD=<password>`
+`cvlc --intf rc --rc-fake-tty --no-video --quiet`
+
+Behavior:
+- VLC is started lazily on first `/play` (or Enter play).
+- Switching stations sends `clear` then `add <url>`.
+- Quit path (`q`, `Ctrl+C`, `/quit`) shuts down VLC and force-kills if needed.
+
+If VLC is missing, playback reports an actionable error.
 
 ## Favorites Path
 Defaults to `~/.config/internet-radio-cli/favorites.json`.
 Override with `IRADIO_FAVORITES_PATH`.
 
-## Config File (Phase 3)
-`iradio` now reads config from:
+Favorites persistence format:
+- New format: JSON array of station UUID strings.
+- Migration: legacy station-object arrays are read transparently and rewritten as UUID arrays on next save.
+
+## Config File
+`iradio` reads config from:
 
 - `~/.config/internet-radio-cli/config.toml`
 
-Supported config values:
+Supported values:
 
 ```toml
 [playback]
-mode = "rc" # "rc" or "http"
+mode = "rc" # parsed for compatibility
 
 [radio_browser]
 base_url = "https://de1.api.radio-browser.info"
@@ -53,7 +55,6 @@ min_bitrate = 128
 ```
 
 Environment variables override config file values:
-
 - `IRADIO_PLAYBACK_MODE`
 - `IRADIO_RADIO_BROWSER_BASE`
 - `IRADIO_RADIO_BROWSER_TIMEOUT_MS`
@@ -65,21 +66,39 @@ Environment variables override config file values:
 - `IRADIO_DEFAULT_FILTER_CODEC`
 - `IRADIO_DEFAULT_FILTER_MIN_BITRATE`
 
-## Radio Browser Discovery
-By default, discovery uses `https://de1.api.radio-browser.info`.
+## Keymap
+- `↑/↓` or `j/k`: move selection
+- `Enter` (Search focus):
+  - refreshes results when search input changed
+  - otherwise plays currently selected station
+- `Tab` / `Shift+Tab`: switch pane focus
+- `/`: open slash command input
+- `Ctrl+P`: open command palette
+- `f`: toggle favorite for selected station
+- `s`: stop playback
+- `Space`: pause/resume toggle
+- `q` / `Ctrl+C`: quit cleanly
 
-Optional overrides:
-- `IRADIO_RADIO_BROWSER_BASE`
-- `IRADIO_RADIO_BROWSER_TIMEOUT_MS` (default `3000`)
-- `IRADIO_RADIO_BROWSER_MAX_RETRIES` (default `2`)
-
-Supported slash commands:
+## Slash Commands
 - `/search <text>`
 - `/filter country=<x> language=<y> tag=<z> codec=<c> min_bitrate=<n>`
 - `/clear-filters`
 - `/sort <name|votes|clicks|bitrate>`
+- `/favorites`
+- `/play` (selected)
+- `/play selected`
+- `/play <index>` (1-based)
+- `/play <text>` (name query compatibility)
+- `/stop`
+- `/help`
+- `/quit`
+
+## CLI Flags
+- `--help`
+- `--version`
+- `--debug` (forces `iradio=debug` logging filter for this run)
 
 ## Testing
-- Unit tests: parser, fuzzy palette, favorites persistence, VLC RC command emission.
+- Unit tests: parser, fuzzy palette, favorites persistence, config parsing, VLC adapters.
 - Integration tests: command + favorites behavior with mocked playback/catalog.
 - E2E-style tests: scripted mock playback user flow.

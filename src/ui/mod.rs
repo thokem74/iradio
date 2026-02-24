@@ -46,7 +46,7 @@ impl Tui {
 
     fn handle_key_event(&mut self, app: &mut App, key: KeyEvent) -> Result<()> {
         match (key.modifiers, key.code) {
-            (KeyModifiers::CONTROL, KeyCode::Char('c')) => app.running = false,
+            (KeyModifiers::CONTROL, KeyCode::Char('c')) => app.request_quit()?,
             (KeyModifiers::CONTROL, KeyCode::Char('p')) => {
                 app.toggle_palette();
             }
@@ -62,7 +62,24 @@ impl Tui {
             (_, KeyCode::Down) => app.select_next(),
             (_, KeyCode::Char('j')) => app.select_next(),
             (_, KeyCode::Tab) => app.toggle_focus(),
+            (_, KeyCode::BackTab) => app.toggle_focus_backward(),
             (_, KeyCode::Char('/')) => app.open_slash_input(),
+            (_, KeyCode::Char('q')) => app.request_quit()?,
+            (_, KeyCode::Char('f')) => {
+                if let Err(err) = app.toggle_selected_favorite() {
+                    app.status_message = format!("Error: {err}");
+                }
+            }
+            (_, KeyCode::Char('s')) => {
+                if let Err(err) = app.stop_playback() {
+                    app.status_message = format!("Error: {err}");
+                }
+            }
+            (_, KeyCode::Char(' ')) => {
+                if let Err(err) = app.pause_or_resume() {
+                    app.status_message = format!("Error: {err}");
+                }
+            }
             (_, KeyCode::Char(c)) => app.push_char(c),
             _ => {}
         }

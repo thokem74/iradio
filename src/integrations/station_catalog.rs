@@ -90,8 +90,10 @@ impl StationCatalog for RadioBrowserCatalog {
             url: Option<String>,
             url_resolved: Option<String>,
             homepage: Option<String>,
+            favicon: Option<String>,
             tags: Option<String>,
             country: Option<String>,
+            countrycode: Option<String>,
             language: Option<String>,
             codec: Option<String>,
             bitrate: Option<u32>,
@@ -118,17 +120,18 @@ impl StationCatalog for RadioBrowserCatalog {
                         let stations = api_stations
                             .into_iter()
                             .map(|s| {
-                                let stream_url =
+                                let url_resolved =
                                     s.url_resolved.or(s.url).unwrap_or_else(|| "".to_string());
 
                                 Station {
-                                    id: s.stationuuid,
+                                    station_uuid: s.stationuuid,
                                     name: s
                                         .name
                                         .filter(|n| !n.trim().is_empty())
                                         .unwrap_or_else(|| "(unnamed station)".to_string()),
-                                    stream_url,
+                                    url_resolved,
                                     homepage: s.homepage,
+                                    favicon: s.favicon.filter(|v| !v.trim().is_empty()),
                                     tags: s
                                         .tags
                                         .unwrap_or_default()
@@ -138,14 +141,15 @@ impl StationCatalog for RadioBrowserCatalog {
                                         .map(ToString::to_string)
                                         .collect(),
                                     country: s.country.filter(|v| !v.trim().is_empty()),
+                                    country_code: s.countrycode.filter(|v| !v.trim().is_empty()),
                                     language: s.language.filter(|v| !v.trim().is_empty()),
                                     codec: s.codec.filter(|v| !v.trim().is_empty()),
                                     bitrate: s.bitrate,
                                     votes: s.votes,
-                                    clicks: s.clickcount,
+                                    click_count: s.clickcount,
                                 }
                             })
-                            .filter(|s| !s.stream_url.trim().is_empty())
+                            .filter(|s| !s.url_resolved.trim().is_empty())
                             .collect();
 
                         return Ok(stations);
@@ -197,7 +201,11 @@ impl StationCatalog for StaticCatalog {
                 stations.sort_by(|a, b| b.votes.cmp(&a.votes).then_with(|| a.name.cmp(&b.name)));
             }
             crate::domain::models::StationSort::Clicks => {
-                stations.sort_by(|a, b| b.clicks.cmp(&a.clicks).then_with(|| a.name.cmp(&b.name)));
+                stations.sort_by(|a, b| {
+                    b.click_count
+                        .cmp(&a.click_count)
+                        .then_with(|| a.name.cmp(&b.name))
+                });
             }
             crate::domain::models::StationSort::Bitrate => {
                 stations
@@ -279,7 +287,7 @@ mod tests {
         handle.join().expect("join server");
         assert_eq!(stations.len(), 1);
         assert_eq!(stations[0].name, "Jazz FM");
-        assert_eq!(stations[0].clicks, Some(20));
+        assert_eq!(stations[0].click_count, Some(20));
     }
 
     #[test]

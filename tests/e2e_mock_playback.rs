@@ -56,6 +56,15 @@ impl PlaybackController for ScriptedPlayback {
         Ok(())
     }
 
+    fn shutdown(&mut self) -> Result<()> {
+        self.events
+            .lock()
+            .expect("lock events")
+            .push("shutdown".to_string());
+        self.state = PlaybackState::Stopped;
+        Ok(())
+    }
+
     fn state(&self) -> PlaybackState {
         self.state
     }
@@ -91,7 +100,8 @@ fn e2e_mock_user_flow_search_play_pause_resume_stop_quit() {
             "play:https://npr-ice.streamguys1.com/live.mp3",
             "pause",
             "resume",
-            "stop"
+            "stop",
+            "shutdown"
         ]
     );
     assert!(!app.running);
