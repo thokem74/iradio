@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use std::io::Write;
 use std::net::TcpStream;
 
@@ -21,7 +21,12 @@ impl VlcRcController {
 
     fn send(&self, command: &str) -> Result<()> {
         let mut stream = TcpStream::connect((self.host.as_str(), self.port))
-            .with_context(|| format!("failed to connect VLC RC at {}:{}", self.host, self.port))?;
+            .with_context(|| {
+                format!(
+                    "failed to connect VLC RC at {}:{}; start VLC with `cvlc --extraintf rc --rc-host {}:{}`",
+                    self.host, self.port, self.host, self.port
+                )
+            })?;
         stream
             .write_all(format!("{command}\n").as_bytes())
             .with_context(|| format!("failed to send command to VLC RC: {command}"))?;
@@ -37,18 +42,33 @@ impl PlaybackController for VlcRcController {
     }
 
     fn stop(&mut self) -> Result<()> {
+        if self.state == PlaybackState::Stopped {
+            return Err(anyhow!(
+                "cannot stop because playback is already stopped; start a stream first with /play"
+            ));
+        }
         self.send("stop")?;
         self.state = PlaybackState::Stopped;
         Ok(())
     }
 
     fn pause(&mut self) -> Result<()> {
+        if self.state != PlaybackState::Playing {
+            return Err(anyhow!(
+                "cannot pause because no stream is currently playing; start playback first"
+            ));
+        }
         self.send("pause")?;
         self.state = PlaybackState::Paused;
         Ok(())
     }
 
     fn resume(&mut self) -> Result<()> {
+        if self.state != PlaybackState::Paused {
+            return Err(anyhow!(
+                "cannot resume because playback is not paused; pause first or use /play"
+            ));
+        }
         self.send("pause")?;
         self.state = PlaybackState::Playing;
         Ok(())
@@ -90,5 +110,28 @@ mod tests {
 
         let payload = handle.join().expect("join thread");
         assert_eq!(payload, "add http://example.com/radio.mp3\n");
+    }
+
+    #[test]
+    fn invalid_transitions_are_rejected_before_network_io() {
+        let mut controller = VlcRcController::new("127.0.0.1", 1);
+
+        let err = controller
+            .pause()
+            .expect_err("pause from stopped should fail");
+        assert!(err.to_string().contains("cannot pause"));
+        assert_eq!(controller.state(), PlaybackState::Stopped);
+
+        let err = controller
+            .resume()
+            .expect_err("resume from stopped should fail");
+        assert!(err.to_string().contains("cannot resume"));
+        assert_eq!(controller.state(), PlaybackState::Stopped);
+
+        let err = controller
+            .stop()
+            .expect_err("stop from stopped should fail");
+        assert!(err.to_string().contains("already stopped"));
+        assert_eq!(controller.state(), PlaybackState::Stopped);
     }
 }
