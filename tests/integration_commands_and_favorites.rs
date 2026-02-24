@@ -31,6 +31,14 @@ impl PlaybackController for MockPlayback {
         Ok(())
     }
 
+    fn set_volume(&mut self, value: u8) -> Result<()> {
+        self.log
+            .lock()
+            .expect("lock log")
+            .push(format!("volume:{value}"));
+        Ok(())
+    }
+
     fn stop(&mut self) -> Result<()> {
         self.log.lock().expect("lock log").push("stop".to_string());
         self.state = PlaybackState::Stopped;
@@ -188,6 +196,72 @@ fn filter_and_sort_commands_refresh_catalog_with_expected_state() {
     assert_eq!(queries[2].sort, StationSort::Clicks);
     assert_eq!(app.sort(), StationSort::Clicks);
     assert_eq!(app.filters().country.as_deref(), Some("US"));
+}
+
+#[test]
+fn volume_command_applies_immediately_while_playing() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let playback = Box::new(MockPlayback::new(log.clone()));
+
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let store = FavoritesStore::new(dir.path().join("favorites.json"));
+
+    let queries = Arc::new(Mutex::new(Vec::new()));
+    let catalog = Box::new(MockCatalog::new(queries, vec![sample_station()]));
+    let mut app = App::new_with_catalog(playback, store, catalog).expect("create app");
+
+    app.focus = Focus::Slash;
+    app.slash_input = "/play selected".to_string();
+    app.submit_current_input().expect("execute /play");
+
+    app.focus = Focus::Slash;
+    app.slash_input = "/volume 40".to_string();
+    app.submit_current_input().expect("execute /volume");
+
+    let calls = log.lock().expect("lock log").clone();
+    assert!(calls
+        .iter()
+        .any(|entry| entry == "play:https://example.com/stream"));
+    assert!(calls.iter().any(|entry| entry == "volume:40"));
+    assert_eq!(app.status_message, "Volume set to 40%");
+}
+
+#[test]
+fn volume_command_deferred_when_stopped_then_applied_on_play() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let playback = Box::new(MockPlayback::new(log.clone()));
+
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let store = FavoritesStore::new(dir.path().join("favorites.json"));
+
+    let queries = Arc::new(Mutex::new(Vec::new()));
+    let catalog = Box::new(MockCatalog::new(queries, vec![sample_station()]));
+    let mut app = App::new_with_catalog(playback, store, catalog).expect("create app");
+
+    app.focus = Focus::Slash;
+    app.slash_input = "/volume 55".to_string();
+    app.submit_current_input().expect("execute /volume");
+    assert_eq!(
+        app.status_message,
+        "Volume 55% saved; will apply on next /play"
+    );
+
+    app.focus = Focus::Slash;
+    app.slash_input = "/play selected".to_string();
+    app.submit_current_input().expect("execute /play");
+
+    let calls = log.lock().expect("lock log").clone();
+    assert_eq!(
+        calls,
+        vec![
+            "play:https://example.com/stream".to_string(),
+            "volume:55".to_string()
+        ]
+    );
+    assert_eq!(
+        app.status_message,
+        "Playing Sample Radio | Volume set to 55%"
+    );
 }
 
 #[test]

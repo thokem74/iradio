@@ -15,11 +15,21 @@ impl FailingPlayback {
             state: PlaybackState::Stopped,
         }
     }
+
+    fn new_playing() -> Self {
+        Self {
+            state: PlaybackState::Playing,
+        }
+    }
 }
 
 impl PlaybackController for FailingPlayback {
     fn play(&mut self, _stream_url: &str) -> Result<()> {
         Err(anyhow!("simulated play failure"))
+    }
+
+    fn set_volume(&mut self, _value: u8) -> Result<()> {
+        Err(anyhow!("simulated volume failure"))
     }
 
     fn stop(&mut self) -> Result<()> {
@@ -98,4 +108,19 @@ fn playback_errors_do_not_crash_submit_flow() {
     app.submit_current_input()
         .expect("stop failure should be handled gracefully");
     assert!(app.status_message.contains("Playback stop failed"));
+}
+
+#[test]
+fn volume_errors_do_not_crash_submit_flow() {
+    let playback = Box::new(FailingPlayback::new_playing());
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let store = FavoritesStore::new(dir.path().join("favorites.json"));
+    let catalog = Box::new(StaticOneStationCatalog);
+    let mut app = App::new_with_catalog(playback, store, catalog).expect("create app");
+
+    app.focus = Focus::Slash;
+    app.slash_input = "/volume 20".to_string();
+    app.submit_current_input()
+        .expect("volume failure should be handled gracefully");
+    assert!(app.status_message.contains("Playback volume failed"));
 }

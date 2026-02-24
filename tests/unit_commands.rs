@@ -35,6 +35,14 @@ fn parse_favorites_command() {
 }
 
 #[test]
+fn parse_volume_command_bounds() {
+    let low = SlashCommand::parse("/volume 0").expect("parse /volume 0");
+    let high = SlashCommand::parse("/volume 100").expect("parse /volume 100");
+    assert_eq!(low, SlashCommand::Volume(0));
+    assert_eq!(high, SlashCommand::Volume(100));
+}
+
+#[test]
 fn parse_search_command() {
     let cmd = SlashCommand::parse("/search news radio").expect("parse /search command");
     assert_eq!(cmd, SlashCommand::Search("news radio".to_string()));
@@ -92,4 +100,34 @@ fn reject_unknown_command() {
 fn reject_zero_play_index() {
     let err = SlashCommand::parse("/play 0").expect_err("index 0 should fail");
     assert!(err.to_string().contains(">= 1"));
+}
+
+#[test]
+fn reject_volume_without_value() {
+    let err = SlashCommand::parse("/volume").expect_err("missing volume should fail");
+    assert!(err.to_string().contains("usage: /volume <0-100>"));
+}
+
+#[test]
+fn reject_volume_with_non_integer() {
+    let err = SlashCommand::parse("/volume loud").expect_err("non-integer should fail");
+    assert!(err.to_string().contains("volume must be an integer"));
+}
+
+#[test]
+fn reject_volume_with_negative_integer() {
+    let err = SlashCommand::parse("/volume -1").expect_err("negative should fail");
+    assert!(err.to_string().contains("volume must be an integer"));
+}
+
+#[test]
+fn reject_volume_out_of_range() {
+    let err = SlashCommand::parse("/volume 101").expect_err("out of range should fail");
+    assert!(err.to_string().contains("between 0 and 100"));
+}
+
+#[test]
+fn reject_volume_with_extra_args() {
+    let err = SlashCommand::parse("/volume 50 extra").expect_err("extra args should fail");
+    assert!(err.to_string().contains("usage: /volume <0-100>"));
 }

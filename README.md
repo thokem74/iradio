@@ -15,6 +15,7 @@ Rust TUI internet radio client using `ratatui` + `crossterm`.
 Behavior:
 - VLC is started lazily on first `/play` (or Enter play).
 - Switching stations sends `clear` then `add <url>`.
+- `/volume <0-100>` while stopped is deferred and auto-applied on the next successful `/play`.
 - Quit path (`q`, `Ctrl+C`, `/quit`) shuts down VLC and force-kills if needed.
 
 If VLC is missing, playback reports an actionable error.
@@ -89,6 +90,7 @@ Environment variables override config file values:
 - `/play selected`
 - `/play <index>` (1-based)
 - `/play <text>` (name query compatibility)
+- `/volume <0-100>`
 - `/stop`
 - `/help`
 - `/quit`

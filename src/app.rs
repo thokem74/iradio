@@ -71,6 +71,7 @@ pub struct App {
     station_cache: HashMap<String, Station>,
     filters: StationFilters,
     sort: StationSort,
+    pending_volume: Option<u8>,
     now_playing: Option<Station>,
     palette_items: Vec<PaletteItem>,
     playback: Box<dyn PlaybackController>,
@@ -131,6 +132,7 @@ impl App {
             station_cache: HashMap::new(),
             filters: defaults.filters,
             sort: defaults.sort,
+            pending_volume: None,
             now_playing: None,
             palette_items: default_palette_items(),
             playback,
@@ -535,7 +537,32 @@ impl App {
                 } else {
                     self.cache_station(&station);
                     self.now_playing = Some(station.clone());
-                    self.status_message = format!("Playing {}", station.name);
+                    if let Some(volume) = self.pending_volume {
+                        if let Err(err) = self.playback.set_volume(volume) {
+                            self.status_message = format!(
+                                "Playing {} | Deferred volume apply failed: {err}",
+                                station.name
+                            );
+                        } else {
+                            self.pending_volume = None;
+                            self.status_message =
+                                format!("Playing {} | Volume set to {}%", station.name, volume);
+                        }
+                    } else {
+                        self.status_message = format!("Playing {}", station.name);
+                    }
+                }
+            }
+            SlashCommand::Volume(value) => {
+                if self.playback_state() == PlaybackState::Stopped {
+                    self.pending_volume = Some(value);
+                    self.status_message =
+                        format!("Volume {}% saved; will apply on next /play", value);
+                } else if let Err(err) = self.playback.set_volume(value) {
+                    self.status_message = format!("Playback volume failed: {err}");
+                } else {
+                    self.pending_volume = None;
+                    self.status_message = format!("Volume set to {}%", value);
                 }
             }
             SlashCommand::Stop => {
@@ -637,7 +664,7 @@ impl App {
                 self.status_message = "Bye".to_string();
             }
             SlashCommand::Help => {
-                self.status_message = "Commands: /play /stop /pause /resume /search /filter /clear-filters /sort /favorites /fav /unfav /quit".to_string();
+                self.status_message = "Commands: /play /volume /stop /pause /resume /search /filter /clear-filters /sort /favorites /fav /unfav /quit".to_string();
             }
         }
 

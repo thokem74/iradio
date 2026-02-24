@@ -12,7 +12,7 @@ use crossterm::ExecutableCommand;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
-use crate::app::App;
+use crate::app::{App, Focus};
 
 pub struct Tui {
     terminal: Terminal<CrosstermBackend<Stdout>>,
@@ -57,26 +57,31 @@ impl Tui {
                 }
             }
             (_, KeyCode::Backspace) => app.backspace_input(),
-            (_, KeyCode::Up) => app.select_previous(),
-            (_, KeyCode::Char('k')) => app.select_previous(),
-            (_, KeyCode::Down) => app.select_next(),
-            (_, KeyCode::Char('j')) => app.select_next(),
+            (_, KeyCode::Up) if app.focus != Focus::Slash => app.select_previous(),
+            (_, KeyCode::Char('k')) if app.focus != Focus::Slash => app.select_previous(),
+            (_, KeyCode::Down) if app.focus != Focus::Slash => app.select_next(),
+            (_, KeyCode::Char('j')) if app.focus != Focus::Slash => app.select_next(),
             (_, KeyCode::Tab) => app.toggle_focus(),
             (_, KeyCode::BackTab) => app.toggle_focus_backward(),
-            (_, KeyCode::Char('/')) => app.open_slash_input(),
-            (_, KeyCode::Char('q')) => app.request_quit()?,
-            (_, KeyCode::Char('f')) => {
+            (_, KeyCode::Char('/')) if app.focus != Focus::Slash => app.open_slash_input(),
+            (_, KeyCode::Char('q')) if app.focus != Focus::Slash => app.request_quit()?,
+            (_, KeyCode::Char('f')) if app.focus != Focus::Slash => {
                 if let Err(err) = app.toggle_selected_favorite() {
                     app.status_message = format!("Error: {err}");
                 }
             }
-            (_, KeyCode::Char('s')) => {
+            (_, KeyCode::Char('s')) if app.focus != Focus::Slash => {
                 if let Err(err) = app.stop_playback() {
                     app.status_message = format!("Error: {err}");
                 }
             }
             (_, KeyCode::Char(' ')) => {
-                if let Err(err) = app.pause_or_resume() {
+                if app.focus == Focus::Slash
+                    || (app.focus == Focus::Search
+                        && (!app.search_input.is_empty() || app.search_dirty()))
+                {
+                    app.push_char(' ');
+                } else if let Err(err) = app.pause_or_resume() {
                     app.status_message = format!("Error: {err}");
                 }
             }

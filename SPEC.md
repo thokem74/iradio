@@ -83,8 +83,9 @@ Project Slug: 2026-02-22_internet-radio-cli
 - Favorites MUST persist across sessions locally.
 
 ### FR-007 Slash commands
-- App MUST provide slash command input (e.g., `/search`, `/filter`, `/favorites`, `/play`, `/stop`, `/quit`).
+- App MUST provide slash command input (e.g., `/search`, `/filter`, `/favorites`, `/play`, `/volume`, `/stop`, `/quit`).
 - App MUST validate command arguments and show usage on invalid input.
+- `/volume <value>` MUST accept integer values in `0..100`; if issued while stopped, it SHOULD apply on next successful `/play`.
 
 ### FR-008 Command palette
 - App MUST provide command palette (e.g., `Ctrl+P`) listing available actions.
@@ -225,6 +226,7 @@ Project Slug: 2026-02-22_internet-radio-cli
 - `/sort <name|votes|clicks|bitrate>`
 - `/favorites`
 - `/play <index>`
+- `/volume <value>`
 - `/stop`
 - `/help`
 - `/quit`
