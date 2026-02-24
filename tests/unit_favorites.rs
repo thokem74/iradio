@@ -13,6 +13,12 @@ fn save_and_load_favorites_round_trip() {
         stream_url: "http://example.com/1".to_string(),
         homepage: None,
         tags: vec!["tag".to_string()],
+        country: None,
+        language: None,
+        codec: None,
+        bitrate: None,
+        votes: None,
+        clicks: None,
     }];
 
     store.save(&stations).expect("save favorites");

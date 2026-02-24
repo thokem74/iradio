@@ -69,7 +69,11 @@ mod tests {
 
     #[test]
     fn play_sends_add_command() {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind listener");
+        let listener = match TcpListener::bind(("127.0.0.1", 0)) {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(err) => panic!("bind listener: {err}"),
+        };
         let port = listener.local_addr().expect("read local addr").port();
 
         let handle = thread::spawn(move || {

@@ -75,6 +75,8 @@ fn e2e_mock_user_flow_search_play_pause_resume_stop_quit() {
     for c in "news".chars() {
         app.push_char(c);
     }
+    app.submit_current_input()
+        .expect("refresh search results from catalog");
 
     app.focus = Focus::Slash;
     for cmd in ["/play selected", "/pause", "/resume", "/stop", "/quit"] {
@@ -86,7 +88,7 @@ fn e2e_mock_user_flow_search_play_pause_resume_stop_quit() {
     assert_eq!(
         calls,
         vec![
-            "play:http://stream.live.vc.bbcmedia.co.uk/bbc_world_service",
+            "play:https://npr-ice.streamguys1.com/live.mp3",
             "pause",
             "resume",
             "stop"

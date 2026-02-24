@@ -1,5 +1,7 @@
 use anyhow::{anyhow, Result};
 
+use crate::domain::models::{StationFilters, StationSort};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlashCommand {
     Play(String),
@@ -7,6 +9,9 @@ pub enum SlashCommand {
     Pause,
     Resume,
     Search(String),
+    Filter(StationFilters),
+    ClearFilters,
+    Sort(StationSort),
     Favorite,
     Unfavorite,
     Quit,
@@ -43,6 +48,32 @@ impl SlashCommand {
                     Ok(Self::Search(query))
                 }
             }
+            "filter" => {
+                let args = parts.collect::<Vec<_>>();
+                if args.is_empty() {
+                    return Err(anyhow!(
+                        "usage: /filter country=<x> language=<y> tag=<z> codec=<c> min_bitrate=<n>"
+                    ));
+                }
+                Ok(Self::Filter(parse_filter_args(&args)?))
+            }
+            "clear-filters" => Ok(Self::ClearFilters),
+            "sort" => {
+                let value = parts
+                    .next()
+                    .ok_or_else(|| anyhow!("usage: /sort <name|votes|clicks|bitrate>"))?;
+                if parts.next().is_some() {
+                    return Err(anyhow!("usage: /sort <name|votes|clicks|bitrate>"));
+                }
+                let sort = match value.to_ascii_lowercase().as_str() {
+                    "name" => StationSort::Name,
+                    "votes" => StationSort::Votes,
+                    "clicks" => StationSort::Clicks,
+                    "bitrate" => StationSort::Bitrate,
+                    _ => return Err(anyhow!("invalid sort field: {value}")),
+                };
+                Ok(Self::Sort(sort))
+            }
             "fav" | "favorite" => Ok(Self::Favorite),
             "unfav" | "unfavorite" => Ok(Self::Unfavorite),
             "quit" | "q" => Ok(Self::Quit),
@@ -50,4 +81,33 @@ impl SlashCommand {
             _ => Err(anyhow!("unknown command: {cmd}")),
         }
     }
+}
+
+fn parse_filter_args(args: &[&str]) -> Result<StationFilters> {
+    let mut filters = StationFilters::default();
+
+    for arg in args {
+        let (key, value) = arg
+            .split_once('=')
+            .ok_or_else(|| anyhow!("invalid filter syntax: {arg} (expected key=value)"))?;
+        if value.trim().is_empty() {
+            return Err(anyhow!("filter value cannot be empty for key: {key}"));
+        }
+
+        match key.to_ascii_lowercase().as_str() {
+            "country" => filters.country = Some(value.to_string()),
+            "language" => filters.language = Some(value.to_string()),
+            "tag" => filters.tag = Some(value.to_string()),
+            "codec" => filters.codec = Some(value.to_string()),
+            "min_bitrate" => {
+                let bitrate = value
+                    .parse::<u32>()
+                    .map_err(|_| anyhow!("min_bitrate must be an integer"))?;
+                filters.min_bitrate = Some(bitrate);
+            }
+            _ => return Err(anyhow!("unknown filter key: {key}")),
+        }
+    }
+
+    Ok(filters)
 }

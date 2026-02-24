@@ -2,7 +2,9 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use iradio::app::{App, Focus};
+use iradio::domain::models::{Station, StationFilters, StationSearchQuery, StationSort};
 use iradio::integrations::playback::{PlaybackController, PlaybackState};
+use iradio::integrations::station_catalog::StationCatalog;
 use iradio::storage::favorites::FavoritesStore;
 
 struct MockPlayback {
@@ -55,6 +57,27 @@ impl PlaybackController for MockPlayback {
     }
 }
 
+struct MockCatalog {
+    queries: Arc<Mutex<Vec<StationSearchQuery>>>,
+    stations: Vec<Station>,
+}
+
+impl MockCatalog {
+    fn new(queries: Arc<Mutex<Vec<StationSearchQuery>>>, stations: Vec<Station>) -> Self {
+        Self { queries, stations }
+    }
+}
+
+impl StationCatalog for MockCatalog {
+    fn search(&self, query: &StationSearchQuery) -> anyhow::Result<Vec<Station>> {
+        self.queries
+            .lock()
+            .expect("lock queries")
+            .push(query.clone());
+        Ok(self.stations.clone())
+    }
+}
+
 #[test]
 fn slash_play_and_favorite_updates_state_and_storage() {
     let log = Arc::new(Mutex::new(Vec::new()));
@@ -63,7 +86,10 @@ fn slash_play_and_favorite_updates_state_and_storage() {
     let dir = tempfile::tempdir().expect("create tempdir");
     let store = FavoritesStore::new(dir.path().join("favorites.json"));
 
-    let mut app = App::new(playback, store).expect("create app");
+    let queries = Arc::new(Mutex::new(Vec::new()));
+    let catalog = Box::new(MockCatalog::new(queries, vec![sample_station()]));
+
+    let mut app = App::new_with_catalog(playback, store, catalog).expect("create app");
 
     app.focus = Focus::Slash;
     app.slash_input = "/play selected".to_string();
@@ -76,4 +102,57 @@ fn slash_play_and_favorite_updates_state_and_storage() {
     let calls = log.lock().expect("lock log").clone();
     assert_eq!(calls.len(), 1);
     assert!(calls[0].starts_with("play:"));
+    assert!(app.now_playing().is_some());
+}
+
+#[test]
+fn filter_and_sort_commands_refresh_catalog_with_expected_state() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let playback = Box::new(MockPlayback::new(log));
+
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let store = FavoritesStore::new(dir.path().join("favorites.json"));
+
+    let queries = Arc::new(Mutex::new(Vec::new()));
+    let catalog = Box::new(MockCatalog::new(queries.clone(), vec![sample_station()]));
+
+    let mut app = App::new_with_catalog(playback, store, catalog).expect("create app");
+
+    app.focus = Focus::Slash;
+    app.slash_input =
+        "/filter country=US language=english tag=jazz codec=mp3 min_bitrate=128".to_string();
+    app.submit_current_input().expect("execute /filter");
+
+    app.focus = Focus::Slash;
+    app.slash_input = "/sort clicks".to_string();
+    app.submit_current_input().expect("execute /sort");
+
+    let queries = queries.lock().expect("lock queries").clone();
+    assert_eq!(queries.len(), 3);
+
+    assert_eq!(queries[0].sort, StationSort::Votes);
+    assert_eq!(queries[0].filters, StationFilters::default());
+
+    assert_eq!(queries[1].filters.country.as_deref(), Some("US"));
+    assert_eq!(queries[1].filters.min_bitrate, Some(128));
+
+    assert_eq!(queries[2].sort, StationSort::Clicks);
+    assert_eq!(app.sort(), StationSort::Clicks);
+    assert_eq!(app.filters().country.as_deref(), Some("US"));
+}
+
+fn sample_station() -> Station {
+    Station {
+        id: "station-1".to_string(),
+        name: "Sample Radio".to_string(),
+        stream_url: "https://example.com/stream".to_string(),
+        homepage: None,
+        tags: vec!["jazz".to_string()],
+        country: Some("US".to_string()),
+        language: Some("english".to_string()),
+        codec: Some("mp3".to_string()),
+        bitrate: Some(128),
+        votes: Some(10),
+        clicks: Some(15),
+    }
 }
