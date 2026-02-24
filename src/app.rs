@@ -1,8 +1,6 @@
+use anyhow::{anyhow, Context, Result};
 use std::env;
 use std::path::PathBuf;
-use std::time::Duration;
-
-use anyhow::{anyhow, Context, Result};
 use tracing::warn;
 
 use crate::domain::commands::SlashCommand;
@@ -12,6 +10,7 @@ use crate::integrations::playback::{PlaybackController, PlaybackState};
 use crate::integrations::station_catalog::{RadioBrowserCatalog, StaticCatalog, StationCatalog};
 use crate::integrations::vlc_http::VlcHttpController;
 use crate::integrations::vlc_rc::VlcRcController;
+use crate::storage::config::{PlaybackMode, RuntimeConfig};
 use crate::storage::favorites::FavoritesStore;
 use crate::ui::Tui;
 
@@ -22,6 +21,22 @@ pub enum Focus {
     Palette,
 }
 
+impl Focus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Search => "Search",
+            Self::Slash => "Slash",
+            Self::Palette => "Palette",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AppDefaults {
+    pub sort: StationSort,
+    pub filters: StationFilters,
+}
+
 pub struct App {
     pub running: bool,
     pub status_message: String,
@@ -30,6 +45,7 @@ pub struct App {
     pub search_input: String,
     pub slash_input: String,
     pub palette_input: String,
+    focus_before_palette: Focus,
     filtered: Vec<Station>,
     favorites: Vec<Station>,
     filters: StationFilters,
@@ -58,6 +74,20 @@ impl App {
         favorites_store: FavoritesStore,
         station_catalog: Box<dyn StationCatalog>,
     ) -> Result<Self> {
+        Self::new_with_catalog_and_defaults(
+            playback,
+            favorites_store,
+            station_catalog,
+            AppDefaults::default(),
+        )
+    }
+
+    pub fn new_with_catalog_and_defaults(
+        playback: Box<dyn PlaybackController>,
+        favorites_store: FavoritesStore,
+        station_catalog: Box<dyn StationCatalog>,
+        defaults: AppDefaults,
+    ) -> Result<Self> {
         let favorites = favorites_store
             .load()
             .context("load favorites on startup")?;
@@ -70,10 +100,11 @@ impl App {
             search_input: String::new(),
             slash_input: String::new(),
             palette_input: String::new(),
+            focus_before_palette: Focus::Search,
             filtered: Vec::new(),
             favorites,
-            filters: StationFilters::default(),
-            sort: StationSort::default(),
+            filters: defaults.filters,
+            sort: defaults.sort,
             now_playing: None,
             palette_items: default_palette_items(),
             playback,
@@ -133,19 +164,23 @@ impl App {
     }
 
     pub fn toggle_focus(&mut self) {
-        self.focus = match self.focus {
+        let next_focus = match self.focus {
             Focus::Search => Focus::Slash,
-            Focus::Slash => Focus::Search,
+            Focus::Slash => Focus::Palette,
             Focus::Palette => Focus::Search,
         };
+        self.set_focus(next_focus);
     }
 
     pub fn toggle_palette(&mut self) {
-        self.focus = if self.focus == Focus::Palette {
-            Focus::Search
+        if self.focus == Focus::Palette {
+            self.focus = self.focus_before_palette;
+            self.status_message = format!("Focus: {}", self.focus.label());
         } else {
-            Focus::Palette
-        };
+            self.focus_before_palette = self.focus;
+            self.focus = Focus::Palette;
+            self.status_message = "Focus: Palette".to_string();
+        }
     }
 
     pub fn open_slash_input(&mut self) {
@@ -161,8 +196,9 @@ impl App {
 
     pub fn close_overlays(&mut self) {
         if self.focus == Focus::Palette {
-            self.focus = Focus::Search;
+            self.focus = self.focus_before_palette;
             self.palette_input.clear();
+            self.status_message = format!("Focus: {}", self.focus.label());
         }
     }
 
@@ -212,7 +248,7 @@ impl App {
                     .first()
                     .cloned()
                     .ok_or_else(|| anyhow!("no command matched palette input"))?;
-                self.focus = Focus::Search;
+                self.focus = self.focus_before_palette;
                 self.palette_input.clear();
                 self.execute_palette_action(&selected.action)
             }
@@ -275,8 +311,10 @@ impl App {
             "favorite" => SlashCommand::Favorite,
             "unfavorite" => SlashCommand::Unfavorite,
             "clear-filters" => SlashCommand::ClearFilters,
+            "sort-name" => SlashCommand::Sort(StationSort::Name),
             "sort-votes" => SlashCommand::Sort(StationSort::Votes),
             "sort-clicks" => SlashCommand::Sort(StationSort::Clicks),
+            "sort-bitrate" => SlashCommand::Sort(StationSort::Bitrate),
             "help" => SlashCommand::Help,
             "quit" => SlashCommand::Quit,
             _ => return Err(anyhow!("unsupported palette action: {action}")),
@@ -298,21 +336,34 @@ impl App {
                 }
                 .ok_or_else(|| anyhow!("no station found for play command"))?;
 
-                self.playback.play(&station.stream_url)?;
-                self.now_playing = Some(station.clone());
-                self.status_message = format!("Playing {}", station.name);
+                if let Err(err) = self.playback.play(&station.stream_url) {
+                    self.status_message = format!("Playback play failed: {err}");
+                } else {
+                    self.now_playing = Some(station.clone());
+                    self.status_message = format!("Playing {}", station.name);
+                }
             }
             SlashCommand::Stop => {
-                self.playback.stop()?;
-                self.status_message = "Playback stopped".to_string();
+                if let Err(err) = self.playback.stop() {
+                    self.status_message = format!("Playback stop failed: {err}");
+                } else {
+                    self.now_playing = None;
+                    self.status_message = "Playback stopped".to_string();
+                }
             }
             SlashCommand::Pause => {
-                self.playback.pause()?;
-                self.status_message = "Playback paused".to_string();
+                if let Err(err) = self.playback.pause() {
+                    self.status_message = format!("Playback pause failed: {err}");
+                } else {
+                    self.status_message = "Playback paused".to_string();
+                }
             }
             SlashCommand::Resume => {
-                self.playback.resume()?;
-                self.status_message = "Playback resumed".to_string();
+                if let Err(err) = self.playback.resume() {
+                    self.status_message = format!("Playback resume failed: {err}");
+                } else {
+                    self.status_message = "Playback resumed".to_string();
+                }
             }
             SlashCommand::Search(query) => {
                 self.search_input = query;
@@ -370,20 +421,28 @@ impl App {
     fn palette_results(&self) -> Vec<PaletteItem> {
         fuzzy_filter(&self.palette_items, &self.palette_input)
     }
+
+    fn set_focus(&mut self, focus: Focus) {
+        self.focus = focus;
+        if self.focus != Focus::Palette {
+            self.focus_before_palette = self.focus;
+        }
+        self.status_message = format!("Focus: {}", self.focus.label());
+    }
 }
 
 pub fn run() -> Result<()> {
     init_tracing();
 
-    let playback_mode = env::var("IRADIO_PLAYBACK_MODE").unwrap_or_else(|_| "rc".to_string());
-    let playback: Box<dyn PlaybackController> = match playback_mode.as_str() {
-        "http" => {
+    let config = RuntimeConfig::load().context("load runtime config")?;
+    let playback: Box<dyn PlaybackController> = match config.playback.mode {
+        PlaybackMode::Http => {
             let base = env::var("IRADIO_VLC_HTTP_BASE")
                 .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
             let pass = env::var("IRADIO_VLC_HTTP_PASSWORD").unwrap_or_default();
             Box::new(VlcHttpController::new(base, pass))
         }
-        _ => {
+        PlaybackMode::Rc => {
             let host = env::var("IRADIO_VLC_RC_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
             let port = env::var("IRADIO_VLC_RC_PORT")
                 .ok()
@@ -399,27 +458,24 @@ pub fn run() -> Result<()> {
             env::var("HOME")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| PathBuf::from("."))
-                .join(".config/iradio/favorites.json")
+                .join(".config/internet-radio-cli/favorites.json")
         });
-
-    let api_base = env::var("IRADIO_RADIO_BROWSER_BASE")
-        .unwrap_or_else(|_| "https://de1.api.radio-browser.info".to_string());
-    let api_timeout_ms = env::var("IRADIO_RADIO_BROWSER_TIMEOUT_MS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(3_000);
-    let api_retries = env::var("IRADIO_RADIO_BROWSER_MAX_RETRIES")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(2);
 
     let store = FavoritesStore::new(favorites_path);
     let station_catalog = Box::new(RadioBrowserCatalog::new_with_config(
-        api_base,
-        Duration::from_millis(api_timeout_ms),
-        api_retries,
+        config.radio_browser.base_url,
+        std::time::Duration::from_millis(config.radio_browser.timeout_ms),
+        config.radio_browser.retries,
     )?);
-    let mut app = App::new_with_catalog(playback, store, station_catalog)?;
+    let mut app = App::new_with_catalog_and_defaults(
+        playback,
+        store,
+        station_catalog,
+        AppDefaults {
+            sort: config.defaults.sort,
+            filters: config.defaults.filters,
+        },
+    )?;
     let mut tui = Tui::new()?;
 
     if let Err(err) = tui.run(&mut app) {
@@ -470,12 +526,20 @@ fn default_palette_items() -> Vec<PaletteItem> {
             action: "clear-filters".to_string(),
         },
         PaletteItem {
+            label: "Sort by name".to_string(),
+            action: "sort-name".to_string(),
+        },
+        PaletteItem {
             label: "Sort by votes".to_string(),
             action: "sort-votes".to_string(),
         },
         PaletteItem {
             label: "Sort by clicks".to_string(),
             action: "sort-clicks".to_string(),
+        },
+        PaletteItem {
+            label: "Sort by bitrate".to_string(),
+            action: "sort-bitrate".to_string(),
         },
         PaletteItem {
             label: "Show help".to_string(),

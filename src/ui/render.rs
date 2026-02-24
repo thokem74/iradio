@@ -17,14 +17,10 @@ pub fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
         ])
         .split(frame.area());
 
-    let focus_label = match app.focus {
-        Focus::Search => "Search",
-        Focus::Slash => "Slash",
-        Focus::Palette => "Palette",
-    };
+    let focus_label = app.focus.label();
 
     let header = Paragraph::new(format!(
-        "iradio | Focus: {} | Tab switch focus | / open command | Ctrl+P palette",
+        "iradio | Focus: {} | Tab cycle focus | / slash | Ctrl+P palette | Esc close overlay",
         focus_label
     ))
     .style(
@@ -57,8 +53,17 @@ pub fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
         .collect();
 
     let station_title = format!("Stations ({})", app.visible_stations().len());
-    let stations =
-        List::new(list_items).block(Block::default().borders(Borders::ALL).title(station_title));
+    let station_block = Block::default()
+        .borders(Borders::ALL)
+        .title(station_title)
+        .style(if app.focus == Focus::Search {
+            Style::default()
+                .fg(Color::LightCyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        });
+    let stations = List::new(list_items).block(station_block);
     frame.render_widget(stations, body[0]);
 
     let playback_status = match app.playback_state() {
@@ -112,8 +117,17 @@ pub fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
     };
 
     let input_value = app.current_input();
-    let input = Paragraph::new(Text::from(input_value))
-        .block(Block::default().borders(Borders::ALL).title(input_title));
+    let input_block = Block::default()
+        .borders(Borders::ALL)
+        .title(input_title)
+        .style(if matches!(app.focus, Focus::Slash | Focus::Palette) {
+            Style::default()
+                .fg(Color::LightGreen)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        });
+    let input = Paragraph::new(Text::from(input_value)).block(input_block);
     frame.render_widget(input, chunks[2]);
 
     let status = Paragraph::new(app.status_message.clone())

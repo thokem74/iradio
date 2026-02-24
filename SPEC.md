@@ -6,6 +6,10 @@ Last Updated: 2026-02-24
 Project Slug: 2026-02-22_internet-radio-cli
 
 ## Implementation Progress Notes
+- 2026-02-24 (Phase 3): Added runtime config loading from `~/.config/internet-radio-cli/config.toml` with env-var precedence for playback mode, Radio Browser defaults, and default sort/filters.
+- 2026-02-24 (Phase 3): Hardened VLC RC/HTTP playback adapters with invalid transition checks and actionable error messages for connection/auth failures.
+- 2026-02-24 (Phase 3): Improved focus/palette UX with predictable focus restore/cycle behavior and clearer active-pane feedback in the TUI.
+- 2026-02-24 (Phase 3): Expanded automated coverage for config precedence, playback failure handling, and focus/palette interactions.
 - 2026-02-24 (Phase 2 polish): Radio Browser live discovery is wired into runtime search flow with query + filter params (`country`, `language`, `tag`, `codec`, `min_bitrate`) and sort (`name`, `votes`, `clicks`, `bitrate`).
 - 2026-02-24 (Phase 2 polish): Added timeout + bounded retry behavior in Radio Browser client and improved user-facing status errors for failed discovery requests.
 - 2026-02-24 (Phase 2 polish): Added Now Playing/details pane fields for station name, URL, codec, bitrate, country/language, and playback status.
