@@ -30,8 +30,48 @@ Use VLC with either remote control mode.
    - `IRADIO_VLC_HTTP_PASSWORD=<password>`
 
 ## Favorites Path
-Defaults to `~/.config/iradio/favorites.json`.
+Defaults to `~/.config/internet-radio-cli/favorites.json`.
 Override with `IRADIO_FAVORITES_PATH`.
+
+## Config File (Phase 3)
+`iradio` now reads config from:
+
+- `~/.config/internet-radio-cli/config.toml`
+
+Supported config values:
+
+```toml
+[playback]
+mode = "rc" # "rc" or "http"
+
+[radio_browser]
+base_url = "https://de1.api.radio-browser.info"
+timeout_ms = 3000
+retries = 2
+
+[defaults]
+sort = "votes" # name|votes|clicks|bitrate
+
+[defaults.filters]
+country = "US"
+language = "english"
+tag = "news"
+codec = "mp3"
+min_bitrate = 128
+```
+
+Environment variables override config file values:
+
+- `IRADIO_PLAYBACK_MODE`
+- `IRADIO_RADIO_BROWSER_BASE`
+- `IRADIO_RADIO_BROWSER_TIMEOUT_MS`
+- `IRADIO_RADIO_BROWSER_MAX_RETRIES`
+- `IRADIO_DEFAULT_SORT`
+- `IRADIO_DEFAULT_FILTER_COUNTRY`
+- `IRADIO_DEFAULT_FILTER_LANGUAGE`
+- `IRADIO_DEFAULT_FILTER_TAG`
+- `IRADIO_DEFAULT_FILTER_CODEC`
+- `IRADIO_DEFAULT_FILTER_MIN_BITRATE`
 
 ## Radio Browser Discovery
 By default, discovery uses `https://de1.api.radio-browser.info`.
