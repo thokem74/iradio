@@ -17,6 +17,12 @@ pub struct VlcProcessController {
     state: PlaybackState,
 }
 
+impl Default for VlcProcessController {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VlcProcessController {
     pub fn new() -> Self {
         Self::new_with_program("cvlc")
