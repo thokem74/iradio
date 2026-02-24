@@ -3,14 +3,13 @@ use std::env;
 use std::path::PathBuf;
 use tracing::warn;
 
-use crate::domain::commands::SlashCommand;
+use crate::domain::commands::{PlayTarget, SlashCommand};
 use crate::domain::models::{Station, StationFilters, StationSearchQuery, StationSort};
 use crate::domain::palette::{fuzzy_filter, PaletteItem};
 use crate::integrations::playback::{PlaybackController, PlaybackState};
 use crate::integrations::station_catalog::{RadioBrowserCatalog, StaticCatalog, StationCatalog};
-use crate::integrations::vlc_http::VlcHttpController;
-use crate::integrations::vlc_rc::VlcRcController;
-use crate::storage::config::{PlaybackMode, RuntimeConfig};
+use crate::integrations::vlc_process::VlcProcessController;
+use crate::storage::config::RuntimeConfig;
 use crate::storage::favorites::FavoritesStore;
 use crate::ui::Tui;
 
@@ -31,6 +30,21 @@ impl Focus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultsSource {
+    Stations,
+    Favorites,
+}
+
+impl ResultsSource {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Stations => "Stations",
+            Self::Favorites => "Favorites",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct AppDefaults {
     pub sort: StationSort,
@@ -46,6 +60,9 @@ pub struct App {
     pub slash_input: String,
     pub palette_input: String,
     focus_before_palette: Focus,
+    search_dirty: bool,
+    results_source: ResultsSource,
+    palette_selected_index: usize,
     filtered: Vec<Station>,
     favorites: Vec<Station>,
     filters: StationFilters,
@@ -101,6 +118,9 @@ impl App {
             slash_input: String::new(),
             palette_input: String::new(),
             focus_before_palette: Focus::Search,
+            search_dirty: false,
+            results_source: ResultsSource::Stations,
+            palette_selected_index: 0,
             filtered: Vec::new(),
             favorites,
             filters: defaults.filters,
@@ -122,11 +142,14 @@ impl App {
     }
 
     pub fn visible_stations(&self) -> &[Station] {
-        &self.filtered
+        match self.results_source {
+            ResultsSource::Stations => &self.filtered,
+            ResultsSource::Favorites => &self.favorites,
+        }
     }
 
     pub fn selected_station(&self) -> Option<&Station> {
-        self.filtered.get(self.selected_index)
+        self.visible_stations().get(self.selected_index)
     }
 
     pub fn details_station(&self) -> Option<&Station> {
@@ -163,6 +186,26 @@ impl App {
         }
     }
 
+    pub fn results_source_label(&self) -> &'static str {
+        self.results_source.label()
+    }
+
+    pub fn search_dirty(&self) -> bool {
+        self.search_dirty
+    }
+
+    pub fn palette_selected_index(&self) -> usize {
+        self.palette_selected_index
+    }
+
+    pub fn palette_preview(&self, limit: usize) -> Vec<PaletteItem> {
+        let mut results = self.palette_results();
+        if results.len() > limit {
+            results.truncate(limit);
+        }
+        results
+    }
+
     pub fn toggle_focus(&mut self) {
         let next_focus = match self.focus {
             Focus::Search => Focus::Slash,
@@ -172,6 +215,15 @@ impl App {
         self.set_focus(next_focus);
     }
 
+    pub fn toggle_focus_backward(&mut self) {
+        let prev_focus = match self.focus {
+            Focus::Search => Focus::Palette,
+            Focus::Slash => Focus::Search,
+            Focus::Palette => Focus::Slash,
+        };
+        self.set_focus(prev_focus);
+    }
+
     pub fn toggle_palette(&mut self) {
         if self.focus == Focus::Palette {
             self.focus = self.focus_before_palette;
@@ -179,6 +231,7 @@ impl App {
         } else {
             self.focus_before_palette = self.focus;
             self.focus = Focus::Palette;
+            self.palette_selected_index = 0;
             self.status_message = "Focus: Palette".to_string();
         }
     }
@@ -198,6 +251,7 @@ impl App {
         if self.focus == Focus::Palette {
             self.focus = self.focus_before_palette;
             self.palette_input.clear();
+            self.palette_selected_index = 0;
             self.status_message = format!("Focus: {}", self.focus.label());
         }
     }
@@ -206,9 +260,13 @@ impl App {
         match self.focus {
             Focus::Search => {
                 self.search_input.push(c);
+                self.search_dirty = true;
             }
             Focus::Slash => self.slash_input.push(c),
-            Focus::Palette => self.palette_input.push(c),
+            Focus::Palette => {
+                self.palette_input.push(c);
+                self.palette_selected_index = 0;
+            }
         }
     }
 
@@ -216,12 +274,14 @@ impl App {
         match self.focus {
             Focus::Search => {
                 self.search_input.pop();
+                self.search_dirty = true;
             }
             Focus::Slash => {
                 self.slash_input.pop();
             }
             Focus::Palette => {
                 self.palette_input.pop();
+                self.palette_selected_index = 0;
             }
         }
     }
@@ -229,13 +289,19 @@ impl App {
     pub fn submit_current_input(&mut self) -> Result<()> {
         match self.focus {
             Focus::Search => {
-                self.refresh_stations()?;
-                self.status_message = format!(
-                    "Search refreshed ({} results, sort={})",
-                    self.filtered.len(),
-                    sort_label(self.sort)
-                );
-                Ok(())
+                if self.search_dirty {
+                    self.results_source = ResultsSource::Stations;
+                    self.refresh_stations()?;
+                    self.search_dirty = false;
+                    self.status_message = format!(
+                        "Search refreshed ({} results, sort={})",
+                        self.filtered.len(),
+                        sort_label(self.sort)
+                    );
+                    Ok(())
+                } else {
+                    self.execute_command(SlashCommand::Play(PlayTarget::Selected))
+                }
             }
             Focus::Slash => {
                 let cmd = self.slash_input.clone();
@@ -243,33 +309,104 @@ impl App {
                 self.execute_slash(&cmd)
             }
             Focus::Palette => {
-                let selected = self
-                    .palette_results()
-                    .first()
+                let results = self.palette_results();
+                let selected = results
+                    .get(self.palette_selected_index)
                     .cloned()
                     .ok_or_else(|| anyhow!("no command matched palette input"))?;
                 self.focus = self.focus_before_palette;
                 self.palette_input.clear();
+                self.palette_selected_index = 0;
                 self.execute_palette_action(&selected.action)
             }
         }
     }
 
     pub fn select_next(&mut self) {
-        if self.filtered.is_empty() {
+        if self.focus == Focus::Palette {
+            let len = self.palette_results().len();
+            if len == 0 {
+                return;
+            }
+            self.palette_selected_index = (self.palette_selected_index + 1) % len;
             return;
         }
-        self.selected_index = (self.selected_index + 1) % self.filtered.len();
+
+        let len = self.visible_stations().len();
+        if len == 0 {
+            return;
+        }
+        self.selected_index = (self.selected_index + 1) % len;
     }
 
     pub fn select_previous(&mut self) {
-        if self.filtered.is_empty() {
+        if self.focus == Focus::Palette {
+            let len = self.palette_results().len();
+            if len == 0 {
+                return;
+            }
+            if self.palette_selected_index == 0 {
+                self.palette_selected_index = len - 1;
+            } else {
+                self.palette_selected_index -= 1;
+            }
+            return;
+        }
+
+        let len = self.visible_stations().len();
+        if len == 0 {
             return;
         }
         if self.selected_index == 0 {
-            self.selected_index = self.filtered.len() - 1;
+            self.selected_index = len - 1;
         } else {
             self.selected_index -= 1;
+        }
+    }
+
+    pub fn toggle_selected_favorite(&mut self) -> Result<()> {
+        let Some(station) = self.selected_station().cloned() else {
+            return Err(anyhow!("no station selected"));
+        };
+        if self.is_favorite(&station) {
+            self.favorites.retain(|s| s.id != station.id);
+            self.favorites_store.save(&self.favorites)?;
+            self.clamp_selected_index();
+            self.status_message = format!("Unfavorited {}", station.name);
+        } else {
+            self.favorites.push(station.clone());
+            self.favorites_store.save(&self.favorites)?;
+            self.status_message = format!("Favorited {}", station.name);
+        }
+        Ok(())
+    }
+
+    pub fn stop_playback(&mut self) -> Result<()> {
+        self.execute_command(SlashCommand::Stop)
+    }
+
+    pub fn pause_or_resume(&mut self) -> Result<()> {
+        if self.playback_state() == PlaybackState::Paused {
+            self.execute_command(SlashCommand::Resume)
+        } else {
+            self.execute_command(SlashCommand::Pause)
+        }
+    }
+
+    pub fn request_quit(&mut self) -> Result<()> {
+        self.execute_command(SlashCommand::Quit)
+    }
+
+    pub fn shutdown_playback(&mut self) -> Result<()> {
+        self.playback.shutdown()
+    }
+
+    fn clamp_selected_index(&mut self) {
+        let len = self.visible_stations().len();
+        if len == 0 {
+            self.selected_index = 0;
+        } else if self.selected_index >= len {
+            self.selected_index = len - 1;
         }
     }
 
@@ -291,9 +428,7 @@ impl App {
             })?;
 
         self.filtered = stations;
-        if self.selected_index >= self.filtered.len() {
-            self.selected_index = 0;
-        }
+        self.clamp_selected_index();
         Ok(())
     }
 
@@ -304,10 +439,11 @@ impl App {
 
     fn execute_palette_action(&mut self, action: &str) -> Result<()> {
         let command = match action {
-            "play" => SlashCommand::Play("selected".to_string()),
+            "play" => SlashCommand::Play(PlayTarget::Selected),
             "stop" => SlashCommand::Stop,
             "pause" => SlashCommand::Pause,
             "resume" => SlashCommand::Resume,
+            "favorites" => SlashCommand::Favorites,
             "favorite" => SlashCommand::Favorite,
             "unfavorite" => SlashCommand::Unfavorite,
             "clear-filters" => SlashCommand::ClearFilters,
@@ -323,19 +459,36 @@ impl App {
         self.execute_command(command)
     }
 
+    fn station_for_play_target(&self, target: PlayTarget) -> Result<Station> {
+        match target {
+            PlayTarget::Selected => self
+                .selected_station()
+                .cloned()
+                .ok_or_else(|| anyhow!("no station selected")),
+            PlayTarget::Index(index) => {
+                let stations = self.visible_stations();
+                if stations.is_empty() {
+                    return Err(anyhow!("no stations available to play"));
+                }
+                let idx = index - 1;
+                stations
+                    .get(idx)
+                    .cloned()
+                    .ok_or_else(|| anyhow!("index out of range: valid 1..{}", stations.len()))
+            }
+            PlayTarget::Query(target) => self
+                .visible_stations()
+                .iter()
+                .find(|s| s.name.to_lowercase().contains(&target.to_lowercase()))
+                .cloned()
+                .ok_or_else(|| anyhow!("no station found for play command")),
+        }
+    }
+
     fn execute_command(&mut self, command: SlashCommand) -> Result<()> {
         match command {
             SlashCommand::Play(target) => {
-                let station = if target == "selected" {
-                    self.selected_station().cloned()
-                } else {
-                    self.filtered
-                        .iter()
-                        .find(|s| s.name.to_lowercase().contains(&target.to_lowercase()))
-                        .cloned()
-                }
-                .ok_or_else(|| anyhow!("no station found for play command"))?;
-
+                let station = self.station_for_play_target(target)?;
                 if let Err(err) = self.playback.play(&station.stream_url) {
                     self.status_message = format!("Playback play failed: {err}");
                 } else {
@@ -367,27 +520,40 @@ impl App {
             }
             SlashCommand::Search(query) => {
                 self.search_input = query;
+                self.results_source = ResultsSource::Stations;
                 self.refresh_stations()?;
+                self.search_dirty = false;
                 self.status_message = format!("Search applied ({} results)", self.filtered.len());
             }
             SlashCommand::Filter(filters) => {
                 self.filters = filters;
+                self.results_source = ResultsSource::Stations;
                 self.refresh_stations()?;
+                self.search_dirty = false;
                 self.status_message = format!("Filters applied ({} results)", self.filtered.len());
             }
             SlashCommand::ClearFilters => {
                 self.filters = StationFilters::default();
+                self.results_source = ResultsSource::Stations;
                 self.refresh_stations()?;
+                self.search_dirty = false;
                 self.status_message = format!("Filters cleared ({} results)", self.filtered.len());
             }
             SlashCommand::Sort(sort) => {
                 self.sort = sort;
+                self.results_source = ResultsSource::Stations;
                 self.refresh_stations()?;
+                self.search_dirty = false;
                 self.status_message = format!(
                     "Sort applied: {} ({} results)",
                     sort_label(sort),
                     self.filtered.len()
                 );
+            }
+            SlashCommand::Favorites => {
+                self.results_source = ResultsSource::Favorites;
+                self.clamp_selected_index();
+                self.status_message = format!("Showing favorites ({})", self.favorites.len());
             }
             SlashCommand::Favorite => {
                 let Some(station) = self.selected_station().cloned() else {
@@ -405,13 +571,19 @@ impl App {
                 };
                 self.favorites.retain(|s| s.id != station.id);
                 self.favorites_store.save(&self.favorites)?;
+                self.clamp_selected_index();
                 self.status_message = format!("Unfavorited {}", station.name);
             }
             SlashCommand::Quit => {
+                self.playback
+                    .shutdown()
+                    .context("shutdown playback while quitting")?;
                 self.running = false;
+                self.now_playing = None;
+                self.status_message = "Bye".to_string();
             }
             SlashCommand::Help => {
-                self.status_message = "Commands: /play /stop /pause /resume /search /filter /clear-filters /sort /fav /unfav /quit".to_string();
+                self.status_message = "Commands: /play /stop /pause /resume /search /filter /clear-filters /sort /favorites /fav /unfav /quit".to_string();
             }
         }
 
@@ -435,22 +607,7 @@ pub fn run() -> Result<()> {
     init_tracing();
 
     let config = RuntimeConfig::load().context("load runtime config")?;
-    let playback: Box<dyn PlaybackController> = match config.playback.mode {
-        PlaybackMode::Http => {
-            let base = env::var("IRADIO_VLC_HTTP_BASE")
-                .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
-            let pass = env::var("IRADIO_VLC_HTTP_PASSWORD").unwrap_or_default();
-            Box::new(VlcHttpController::new(base, pass))
-        }
-        PlaybackMode::Rc => {
-            let host = env::var("IRADIO_VLC_RC_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-            let port = env::var("IRADIO_VLC_RC_PORT")
-                .ok()
-                .and_then(|v| v.parse::<u16>().ok())
-                .unwrap_or(4212);
-            Box::new(VlcRcController::new(host, port))
-        }
-    };
+    let playback: Box<dyn PlaybackController> = Box::new(VlcProcessController::new());
 
     let favorites_path = env::var("IRADIO_FAVORITES_PATH")
         .map(PathBuf::from)
@@ -480,9 +637,12 @@ pub fn run() -> Result<()> {
 
     if let Err(err) = tui.run(&mut app) {
         warn!(error = ?err, "tui exited with error");
+        let _ = app.shutdown_playback();
         return Err(err);
     }
 
+    app.shutdown_playback()
+        .context("shutdown playback on exit")?;
     Ok(())
 }
 
@@ -500,6 +660,10 @@ fn default_palette_items() -> Vec<PaletteItem> {
         PaletteItem {
             label: "Play selected station".to_string(),
             action: "play".to_string(),
+        },
+        PaletteItem {
+            label: "Show favorites".to_string(),
+            action: "favorites".to_string(),
         },
         PaletteItem {
             label: "Stop playback".to_string(),

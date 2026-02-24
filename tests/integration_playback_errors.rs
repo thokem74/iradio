@@ -34,6 +34,11 @@ impl PlaybackController for FailingPlayback {
         Err(anyhow!("simulated resume failure"))
     }
 
+    fn shutdown(&mut self) -> Result<()> {
+        self.state = PlaybackState::Stopped;
+        Ok(())
+    }
+
     fn state(&self) -> PlaybackState {
         self.state
     }

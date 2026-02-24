@@ -74,6 +74,11 @@ impl PlaybackController for VlcRcController {
         Ok(())
     }
 
+    fn shutdown(&mut self) -> Result<()> {
+        self.state = PlaybackState::Stopped;
+        Ok(())
+    }
+
     fn state(&self) -> PlaybackState {
         self.state
     }

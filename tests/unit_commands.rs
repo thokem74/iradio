@@ -1,16 +1,37 @@
-use iradio::domain::commands::SlashCommand;
+use iradio::domain::commands::{PlayTarget, SlashCommand};
 use iradio::domain::models::{StationFilters, StationSort};
 
 #[test]
 fn parse_play_command() {
     let cmd = SlashCommand::parse("/play soma").expect("parse /play command");
-    assert_eq!(cmd, SlashCommand::Play("soma".to_string()));
+    assert_eq!(
+        cmd,
+        SlashCommand::Play(PlayTarget::Query("soma".to_string()))
+    );
 }
 
 #[test]
 fn parse_play_without_args_uses_selected_station() {
     let cmd = SlashCommand::parse("/play").expect("parse /play command without args");
-    assert_eq!(cmd, SlashCommand::Play("selected".to_string()));
+    assert_eq!(cmd, SlashCommand::Play(PlayTarget::Selected));
+}
+
+#[test]
+fn parse_play_selected_alias() {
+    let cmd = SlashCommand::parse("/play selected").expect("parse /play selected");
+    assert_eq!(cmd, SlashCommand::Play(PlayTarget::Selected));
+}
+
+#[test]
+fn parse_play_index() {
+    let cmd = SlashCommand::parse("/play 1").expect("parse /play 1");
+    assert_eq!(cmd, SlashCommand::Play(PlayTarget::Index(1)));
+}
+
+#[test]
+fn parse_favorites_command() {
+    let cmd = SlashCommand::parse("/favorites").expect("parse /favorites");
+    assert_eq!(cmd, SlashCommand::Favorites);
 }
 
 #[test]
@@ -65,4 +86,10 @@ fn reject_unknown_sort_field() {
 fn reject_unknown_command() {
     let err = SlashCommand::parse("/does-not-exist").expect_err("unknown command should fail");
     assert!(err.to_string().contains("unknown command"));
+}
+
+#[test]
+fn reject_zero_play_index() {
+    let err = SlashCommand::parse("/play 0").expect_err("index 0 should fail");
+    assert!(err.to_string().contains(">= 1"));
 }

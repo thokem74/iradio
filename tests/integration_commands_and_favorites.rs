@@ -52,6 +52,15 @@ impl PlaybackController for MockPlayback {
         Ok(())
     }
 
+    fn shutdown(&mut self) -> Result<()> {
+        self.log
+            .lock()
+            .expect("lock log")
+            .push("shutdown".to_string());
+        self.state = PlaybackState::Stopped;
+        Ok(())
+    }
+
     fn state(&self) -> PlaybackState {
         self.state
     }
@@ -103,6 +112,46 @@ fn slash_play_and_favorite_updates_state_and_storage() {
     assert_eq!(calls.len(), 1);
     assert!(calls[0].starts_with("play:"));
     assert!(app.now_playing().is_some());
+}
+
+#[test]
+fn favorites_command_switches_results_source_and_play_index() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let playback = Box::new(MockPlayback::new(log.clone()));
+
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let store = FavoritesStore::new(dir.path().join("favorites.json"));
+
+    let queries = Arc::new(Mutex::new(Vec::new()));
+    let catalog = Box::new(MockCatalog::new(
+        queries,
+        vec![sample_station(), sample_station_two()],
+    ));
+
+    let mut app = App::new_with_catalog(playback, store, catalog).expect("create app");
+
+    app.focus = Focus::Slash;
+    app.slash_input = "/fav".to_string();
+    app.submit_current_input().expect("favorite station 1");
+
+    app.select_next();
+    app.focus = Focus::Slash;
+    app.slash_input = "/fav".to_string();
+    app.submit_current_input().expect("favorite station 2");
+
+    app.focus = Focus::Slash;
+    app.slash_input = "/favorites".to_string();
+    app.submit_current_input().expect("switch to favorites");
+    assert_eq!(app.results_source_label(), "Favorites");
+
+    app.focus = Focus::Slash;
+    app.slash_input = "/play 2".to_string();
+    app.submit_current_input().expect("play second favorite");
+
+    let calls = log.lock().expect("lock log").clone();
+    assert!(calls
+        .iter()
+        .any(|entry| entry == "play:https://example.com/stream-two"));
 }
 
 #[test]
@@ -208,5 +257,21 @@ fn sample_station() -> Station {
         bitrate: Some(128),
         votes: Some(10),
         clicks: Some(15),
+    }
+}
+
+fn sample_station_two() -> Station {
+    Station {
+        id: "station-2".to_string(),
+        name: "Sample Radio Two".to_string(),
+        stream_url: "https://example.com/stream-two".to_string(),
+        homepage: None,
+        tags: vec!["news".to_string()],
+        country: Some("US".to_string()),
+        language: Some("english".to_string()),
+        codec: Some("mp3".to_string()),
+        bitrate: Some(96),
+        votes: Some(5),
+        clicks: Some(6),
     }
 }
