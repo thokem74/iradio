@@ -4,9 +4,12 @@ use iradio::app::run;
 
 #[derive(Debug, Parser)]
 #[command(name = "iradio", version, about = "Interactive internet radio TUI")]
-struct Cli {}
+struct Cli {
+    #[arg(long, help = "Enable verbose debug logs")]
+    debug: bool,
+}
 
 fn main() -> Result<()> {
-    let _ = Cli::parse();
-    run()
+    let cli = Cli::parse();
+    run(cli.debug)
 }

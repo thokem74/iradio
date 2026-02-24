@@ -104,15 +104,25 @@ impl VlcProcessController {
             .context("failed flushing VLC command stream; VLC may have exited unexpectedly")?;
         Ok(())
     }
+
+    fn validate_stream_url(url: &str) -> Result<&str> {
+        if url.trim() != url || url.chars().any(|ch| ch.is_ascii_control()) {
+            return Err(anyhow!(
+                "invalid stream URL characters detected; remove control characters and leading/trailing whitespace"
+            ));
+        }
+        Ok(url)
+    }
 }
 
 impl PlaybackController for VlcProcessController {
     fn play(&mut self, stream_url: &str) -> Result<()> {
+        let validated = Self::validate_stream_url(stream_url)?;
         self.spawn_if_needed()?;
         if matches!(self.state, PlaybackState::Playing | PlaybackState::Paused) {
             self.send_command("clear")?;
         }
-        self.send_command(&format!("add {stream_url}"))?;
+        self.send_command(&format!("add {validated}"))?;
         self.state = PlaybackState::Playing;
         Ok(())
     }
@@ -211,5 +221,23 @@ mod tests {
         let mut controller = VlcProcessController::new_with_program("cvlc");
         controller.shutdown().expect("shutdown without process");
         assert_eq!(controller.state(), PlaybackState::Stopped);
+    }
+
+    #[test]
+    fn reject_stream_url_with_control_characters() {
+        let err = VlcProcessController::validate_stream_url("https://a\nb")
+            .expect_err("newline should be rejected");
+        assert!(err
+            .to_string()
+            .contains("invalid stream URL characters detected"));
+    }
+
+    #[test]
+    fn reject_stream_url_with_surrounding_whitespace() {
+        let err = VlcProcessController::validate_stream_url(" https://example.com ")
+            .expect_err("surrounding whitespace should be rejected");
+        assert!(err
+            .to_string()
+            .contains("invalid stream URL characters detected"));
     }
 }

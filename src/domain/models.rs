@@ -2,17 +2,22 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Station {
-    pub id: String,
+    #[serde(alias = "id")]
+    pub station_uuid: String,
     pub name: String,
-    pub stream_url: String,
+    #[serde(alias = "stream_url")]
+    pub url_resolved: String,
     pub homepage: Option<String>,
+    pub favicon: Option<String>,
     pub tags: Vec<String>,
     pub country: Option<String>,
+    pub country_code: Option<String>,
     pub language: Option<String>,
     pub codec: Option<String>,
     pub bitrate: Option<u32>,
     pub votes: Option<u32>,
-    pub clicks: Option<u32>,
+    #[serde(alias = "clicks")]
+    pub click_count: Option<u32>,
 }
 
 impl Station {
@@ -86,5 +91,57 @@ impl Default for StationSearchQuery {
             sort: StationSort::default(),
             limit: 50,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deserialize_legacy_station_fields() {
+        let json = r#"{
+            "id":"legacy-id",
+            "name":"Legacy Station",
+            "stream_url":"https://example.com/legacy",
+            "homepage":null,
+            "tags":["news"],
+            "country":"US",
+            "language":"english",
+            "codec":"mp3",
+            "bitrate":128,
+            "votes":10,
+            "clicks":42
+        }"#;
+
+        let station: Station = serde_json::from_str(json).expect("deserialize legacy station");
+        assert_eq!(station.station_uuid, "legacy-id");
+        assert_eq!(station.url_resolved, "https://example.com/legacy");
+        assert_eq!(station.click_count, Some(42));
+    }
+
+    #[test]
+    fn deserialize_new_station_fields() {
+        let json = r#"{
+            "station_uuid":"new-id",
+            "name":"New Station",
+            "url_resolved":"https://example.com/new",
+            "homepage":null,
+            "favicon":"https://example.com/favicon.png",
+            "tags":["jazz"],
+            "country":"US",
+            "country_code":"US",
+            "language":"english",
+            "codec":"mp3",
+            "bitrate":192,
+            "votes":12,
+            "click_count":99
+        }"#;
+
+        let station: Station = serde_json::from_str(json).expect("deserialize new station");
+        assert_eq!(station.station_uuid, "new-id");
+        assert_eq!(station.url_resolved, "https://example.com/new");
+        assert_eq!(station.country_code.as_deref(), Some("US"));
+        assert_eq!(station.click_count, Some(99));
     }
 }

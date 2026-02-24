@@ -1,6 +1,8 @@
-use anyhow::{anyhow, Context, Result};
+use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
+
+use anyhow::{anyhow, Context, Result};
 use tracing::warn;
 
 use crate::domain::commands::{PlayTarget, SlashCommand};
@@ -64,7 +66,9 @@ pub struct App {
     results_source: ResultsSource,
     palette_selected_index: usize,
     filtered: Vec<Station>,
-    favorites: Vec<Station>,
+    favorites: Vec<String>,
+    favorites_view: Vec<Station>,
+    station_cache: HashMap<String, Station>,
     filters: StationFilters,
     sort: StationSort,
     now_playing: Option<Station>,
@@ -123,6 +127,8 @@ impl App {
             palette_selected_index: 0,
             filtered: Vec::new(),
             favorites,
+            favorites_view: Vec::new(),
+            station_cache: HashMap::new(),
             filters: defaults.filters,
             sort: defaults.sort,
             now_playing: None,
@@ -144,7 +150,7 @@ impl App {
     pub fn visible_stations(&self) -> &[Station] {
         match self.results_source {
             ResultsSource::Stations => &self.filtered,
-            ResultsSource::Favorites => &self.favorites,
+            ResultsSource::Favorites => &self.favorites_view,
         }
     }
 
@@ -175,7 +181,7 @@ impl App {
     }
 
     pub fn is_favorite(&self, station: &Station) -> bool {
-        self.favorites.iter().any(|s| s.id == station.id)
+        self.favorites.iter().any(|id| id == &station.station_uuid)
     }
 
     pub fn current_input(&self) -> String {
@@ -369,13 +375,15 @@ impl App {
             return Err(anyhow!("no station selected"));
         };
         if self.is_favorite(&station) {
-            self.favorites.retain(|s| s.id != station.id);
+            self.favorites.retain(|id| id != &station.station_uuid);
             self.favorites_store.save(&self.favorites)?;
+            self.refresh_favorites_view();
             self.clamp_selected_index();
             self.status_message = format!("Unfavorited {}", station.name);
         } else {
-            self.favorites.push(station.clone());
+            self.favorites.push(station.station_uuid.clone());
             self.favorites_store.save(&self.favorites)?;
+            self.refresh_favorites_view();
             self.status_message = format!("Favorited {}", station.name);
         }
         Ok(())
@@ -399,6 +407,37 @@ impl App {
 
     pub fn shutdown_playback(&mut self) -> Result<()> {
         self.playback.shutdown()
+    }
+
+    fn cache_station(&mut self, station: &Station) {
+        self.station_cache
+            .insert(station.station_uuid.clone(), station.clone());
+    }
+
+    fn cache_stations(&mut self, stations: &[Station]) {
+        for station in stations {
+            self.cache_station(station);
+        }
+    }
+
+    fn refresh_favorites_view(&mut self) -> usize {
+        self.favorites_view.clear();
+        let mut unresolved = 0usize;
+
+        if let Some(now_playing) = &self.now_playing {
+            self.station_cache
+                .insert(now_playing.station_uuid.clone(), now_playing.clone());
+        }
+
+        for id in &self.favorites {
+            if let Some(station) = self.station_cache.get(id) {
+                self.favorites_view.push(station.clone());
+            } else {
+                unresolved += 1;
+            }
+        }
+
+        unresolved
     }
 
     fn clamp_selected_index(&mut self) {
@@ -427,7 +466,9 @@ impl App {
                 )
             })?;
 
+        self.cache_stations(&stations);
         self.filtered = stations;
+        self.refresh_favorites_view();
         self.clamp_selected_index();
         Ok(())
     }
@@ -489,9 +530,10 @@ impl App {
         match command {
             SlashCommand::Play(target) => {
                 let station = self.station_for_play_target(target)?;
-                if let Err(err) = self.playback.play(&station.stream_url) {
+                if let Err(err) = self.playback.play(&station.url_resolved) {
                     self.status_message = format!("Playback play failed: {err}");
                 } else {
+                    self.cache_station(&station);
                     self.now_playing = Some(station.clone());
                     self.status_message = format!("Playing {}", station.name);
                 }
@@ -552,16 +594,27 @@ impl App {
             }
             SlashCommand::Favorites => {
                 self.results_source = ResultsSource::Favorites;
+                let unresolved = self.refresh_favorites_view();
                 self.clamp_selected_index();
-                self.status_message = format!("Showing favorites ({})", self.favorites.len());
+                if unresolved > 0 {
+                    self.status_message = format!(
+                        "Showing favorites ({}) | {} favorites not in current cache; search to hydrate",
+                        self.favorites_view.len(),
+                        unresolved
+                    );
+                } else {
+                    self.status_message =
+                        format!("Showing favorites ({})", self.favorites_view.len());
+                }
             }
             SlashCommand::Favorite => {
                 let Some(station) = self.selected_station().cloned() else {
                     return Err(anyhow!("no station selected"));
                 };
                 if !self.is_favorite(&station) {
-                    self.favorites.push(station.clone());
+                    self.favorites.push(station.station_uuid.clone());
                     self.favorites_store.save(&self.favorites)?;
+                    self.refresh_favorites_view();
                 }
                 self.status_message = format!("Favorited {}", station.name);
             }
@@ -569,8 +622,9 @@ impl App {
                 let Some(station) = self.selected_station().cloned() else {
                     return Err(anyhow!("no station selected"));
                 };
-                self.favorites.retain(|s| s.id != station.id);
+                self.favorites.retain(|id| id != &station.station_uuid);
                 self.favorites_store.save(&self.favorites)?;
+                self.refresh_favorites_view();
                 self.clamp_selected_index();
                 self.status_message = format!("Unfavorited {}", station.name);
             }
@@ -603,8 +657,8 @@ impl App {
     }
 }
 
-pub fn run() -> Result<()> {
-    init_tracing();
+pub fn run(debug: bool) -> Result<()> {
+    init_tracing(debug);
 
     let config = RuntimeConfig::load().context("load runtime config")?;
     let playback: Box<dyn PlaybackController> = Box::new(VlcProcessController::new());
@@ -646,13 +700,20 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn init_tracing() {
+fn init_tracing(debug: bool) {
+    let env_filter = tracing_subscriber::EnvFilter::new(resolve_log_filter(debug));
+
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "iradio=info".into()),
-        )
+        .with_env_filter(env_filter)
         .try_init();
+}
+
+fn resolve_log_filter(debug: bool) -> String {
+    if debug {
+        "iradio=debug".to_string()
+    } else {
+        env::var("RUST_LOG").unwrap_or_else(|_| "iradio=info".to_string())
+    }
 }
 
 fn default_palette_items() -> Vec<PaletteItem> {
@@ -728,43 +789,80 @@ fn sort_label(sort: StationSort) -> &'static str {
 fn default_stations() -> Vec<Station> {
     vec![
         Station {
-            id: "bbc-world-service".to_string(),
+            station_uuid: "bbc-world-service".to_string(),
             name: "BBC World Service".to_string(),
-            stream_url: "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service".to_string(),
+            url_resolved: "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service".to_string(),
             homepage: Some("https://www.bbc.co.uk/worldserviceradio".to_string()),
+            favicon: None,
             tags: vec!["news".to_string(), "world".to_string()],
             country: Some("United Kingdom".to_string()),
+            country_code: Some("GB".to_string()),
             language: Some("English".to_string()),
             codec: Some("MP3".to_string()),
             bitrate: Some(128),
             votes: Some(500),
-            clicks: Some(2_000),
+            click_count: Some(2_000),
         },
         Station {
-            id: "npr".to_string(),
+            station_uuid: "npr".to_string(),
             name: "NPR".to_string(),
-            stream_url: "https://npr-ice.streamguys1.com/live.mp3".to_string(),
+            url_resolved: "https://npr-ice.streamguys1.com/live.mp3".to_string(),
             homepage: Some("https://www.npr.org".to_string()),
+            favicon: None,
             tags: vec!["news".to_string(), "talk".to_string()],
             country: Some("United States".to_string()),
+            country_code: Some("US".to_string()),
             language: Some("English".to_string()),
             codec: Some("MP3".to_string()),
             bitrate: Some(128),
             votes: Some(700),
-            clicks: Some(3_000),
+            click_count: Some(3_000),
         },
         Station {
-            id: "soma-groove".to_string(),
+            station_uuid: "soma-groove".to_string(),
             name: "SomaFM Groove Salad".to_string(),
-            stream_url: "https://ice2.somafm.com/groovesalad-128-mp3".to_string(),
+            url_resolved: "https://ice2.somafm.com/groovesalad-128-mp3".to_string(),
             homepage: Some("https://somafm.com/groovesalad/".to_string()),
+            favicon: None,
             tags: vec!["ambient".to_string(), "electronic".to_string()],
             country: Some("United States".to_string()),
+            country_code: Some("US".to_string()),
             language: Some("English".to_string()),
             codec: Some("MP3".to_string()),
             bitrate: Some(128),
             votes: Some(900),
-            clicks: Some(4_000),
+            click_count: Some(4_000),
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn debug_flag_forces_debug_filter() {
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        env::set_var("RUST_LOG", "iradio=trace");
+        assert_eq!(resolve_log_filter(true), "iradio=debug");
+        env::remove_var("RUST_LOG");
+    }
+
+    #[test]
+    fn rust_log_is_used_when_debug_is_disabled() {
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        env::set_var("RUST_LOG", "iradio=trace");
+        assert_eq!(resolve_log_filter(false), "iradio=trace");
+        env::remove_var("RUST_LOG");
+    }
+
+    #[test]
+    fn default_log_filter_when_rust_log_absent() {
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        env::remove_var("RUST_LOG");
+        assert_eq!(resolve_log_filter(false), "iradio=info");
+    }
 }

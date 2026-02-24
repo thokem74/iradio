@@ -6,6 +6,10 @@ Last Updated: 2026-02-24
 Project Slug: 2026-02-22_internet-radio-cli
 
 ## Implementation Progress Notes
+- 2026-02-24 (Spec conformance): Added `--debug` CLI flag and deterministic log filter precedence (`--debug` > `RUST_LOG` > `iradio=info`).
+- 2026-02-24 (Spec conformance): Aligned normalized `Station` contract with `station_uuid`, `url_resolved`, `favicon`, `country_code`, and `click_count` (with legacy serde aliases).
+- 2026-02-24 (Spec conformance): Migrated favorites persistence to UUID arrays with dual-read compatibility for legacy station-object files.
+- 2026-02-24 (Spec conformance): Hardened VLC stream URL command path by rejecting control characters and surrounding whitespace.
 - 2026-02-24 (Spec conformance): Switched playback backend to managed VLC subprocess lifecycle (`cvlc` spawn/command/shutdown) with quit-time cleanup.
 - 2026-02-24 (Spec conformance): Added `/favorites` results-mode workflow and `/play <index>` parsing/execution with actionable index bounds errors.
 - 2026-02-24 (Spec conformance): Updated keymap behavior (`q`, `Shift+Tab`, `f`, `s`, `Space`) and Enter semantics (refresh when search is dirty, otherwise play selected).

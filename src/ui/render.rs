@@ -79,7 +79,7 @@ pub fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
     let details_lines = if let Some(station) = app.details_station() {
         vec![
             Line::from(format!("Name: {}", station.name)),
-            Line::from(format!("URL: {}", station.stream_url)),
+            Line::from(format!("URL: {}", station.url_resolved)),
             Line::from(format!(
                 "Codec: {}",
                 station.codec.as_deref().unwrap_or("unknown")

@@ -23,6 +23,10 @@ If VLC is missing, playback reports an actionable error.
 Defaults to `~/.config/internet-radio-cli/favorites.json`.
 Override with `IRADIO_FAVORITES_PATH`.
 
+Favorites persistence format:
+- New format: JSON array of station UUID strings.
+- Migration: legacy station-object arrays are read transparently and rewritten as UUID arrays on next save.
+
 ## Config File
 `iradio` reads config from:
 
@@ -92,6 +96,7 @@ Environment variables override config file values:
 ## CLI Flags
 - `--help`
 - `--version`
+- `--debug` (forces `iradio=debug` logging filter for this run)
 
 ## Testing
 - Unit tests: parser, fuzzy palette, favorites persistence, config parsing, VLC adapters.
