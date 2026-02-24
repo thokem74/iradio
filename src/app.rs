@@ -372,7 +372,7 @@ impl App {
     }
 }
 
-pub async fn run() -> Result<()> {
+pub fn run() -> Result<()> {
     init_tracing();
 
     let playback_mode = env::var("IRADIO_PLAYBACK_MODE").unwrap_or_else(|_| "rc".to_string());
