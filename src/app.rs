@@ -1,13 +1,15 @@
 use std::env;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use tracing::warn;
 
 use crate::domain::commands::SlashCommand;
-use crate::domain::models::Station;
+use crate::domain::models::{Station, StationFilters, StationSearchQuery, StationSort};
 use crate::domain::palette::{fuzzy_filter, PaletteItem};
-use crate::integrations::playback::PlaybackController;
+use crate::integrations::playback::{PlaybackController, PlaybackState};
+use crate::integrations::station_catalog::{RadioBrowserCatalog, StaticCatalog, StationCatalog};
 use crate::integrations::vlc_http::VlcHttpController;
 use crate::integrations::vlc_rc::VlcRcController;
 use crate::storage::favorites::FavoritesStore;
@@ -28,12 +30,15 @@ pub struct App {
     pub search_input: String,
     pub slash_input: String,
     pub palette_input: String,
-    stations: Vec<Station>,
     filtered: Vec<Station>,
     favorites: Vec<Station>,
+    filters: StationFilters,
+    sort: StationSort,
+    now_playing: Option<Station>,
     palette_items: Vec<PaletteItem>,
     playback: Box<dyn PlaybackController>,
     favorites_store: FavoritesStore,
+    station_catalog: Box<dyn StationCatalog>,
 }
 
 impl App {
@@ -41,12 +46,23 @@ impl App {
         playback: Box<dyn PlaybackController>,
         favorites_store: FavoritesStore,
     ) -> Result<Self> {
+        Self::new_with_catalog(
+            playback,
+            favorites_store,
+            Box::new(StaticCatalog::new(default_stations())),
+        )
+    }
+
+    pub fn new_with_catalog(
+        playback: Box<dyn PlaybackController>,
+        favorites_store: FavoritesStore,
+        station_catalog: Box<dyn StationCatalog>,
+    ) -> Result<Self> {
         let favorites = favorites_store
             .load()
             .context("load favorites on startup")?;
-        let stations = default_stations();
 
-        Ok(Self {
+        let mut app = Self {
             running: true,
             status_message: "Ready".to_string(),
             selected_index: 0,
@@ -54,17 +70,54 @@ impl App {
             search_input: String::new(),
             slash_input: String::new(),
             palette_input: String::new(),
-            filtered: stations.clone(),
-            stations,
+            filtered: Vec::new(),
             favorites,
+            filters: StationFilters::default(),
+            sort: StationSort::default(),
+            now_playing: None,
             palette_items: default_palette_items(),
             playback,
             favorites_store,
-        })
+            station_catalog,
+        };
+
+        if let Err(err) = app.refresh_stations() {
+            app.status_message = format!("Station discovery unavailable: {err}");
+        } else {
+            app.status_message = format!("Loaded {} stations", app.filtered.len());
+        }
+
+        Ok(app)
     }
 
     pub fn visible_stations(&self) -> &[Station] {
         &self.filtered
+    }
+
+    pub fn selected_station(&self) -> Option<&Station> {
+        self.filtered.get(self.selected_index)
+    }
+
+    pub fn details_station(&self) -> Option<&Station> {
+        self.now_playing
+            .as_ref()
+            .or_else(|| self.selected_station())
+    }
+
+    pub fn now_playing(&self) -> Option<&Station> {
+        self.now_playing.as_ref()
+    }
+
+    pub fn playback_state(&self) -> PlaybackState {
+        self.playback.state()
+    }
+
+    pub fn sort(&self) -> StationSort {
+        self.sort
+    }
+
+    pub fn filters(&self) -> &StationFilters {
+        &self.filters
     }
 
     pub fn is_favorite(&self, station: &Station) -> bool {
@@ -95,6 +148,17 @@ impl App {
         };
     }
 
+    pub fn open_slash_input(&mut self) {
+        if self.focus == Focus::Slash {
+            self.slash_input.push('/');
+            return;
+        }
+        self.focus = Focus::Slash;
+        if self.slash_input.is_empty() {
+            self.slash_input.push('/');
+        }
+    }
+
     pub fn close_overlays(&mut self) {
         if self.focus == Focus::Palette {
             self.focus = Focus::Search;
@@ -106,7 +170,6 @@ impl App {
         match self.focus {
             Focus::Search => {
                 self.search_input.push(c);
-                self.apply_search();
             }
             Focus::Slash => self.slash_input.push(c),
             Focus::Palette => self.palette_input.push(c),
@@ -117,7 +180,6 @@ impl App {
         match self.focus {
             Focus::Search => {
                 self.search_input.pop();
-                self.apply_search();
             }
             Focus::Slash => {
                 self.slash_input.pop();
@@ -131,7 +193,12 @@ impl App {
     pub fn submit_current_input(&mut self) -> Result<()> {
         match self.focus {
             Focus::Search => {
-                self.apply_search();
+                self.refresh_stations()?;
+                self.status_message = format!(
+                    "Search refreshed ({} results, sort={})",
+                    self.filtered.len(),
+                    sort_label(self.sort)
+                );
                 Ok(())
             }
             Focus::Slash => {
@@ -170,20 +237,28 @@ impl App {
         }
     }
 
-    fn apply_search(&mut self) {
-        self.filtered = self
-            .stations
-            .iter()
-            .filter(|s| s.matches_query(&self.search_input))
-            .cloned()
-            .collect();
+    fn refresh_stations(&mut self) -> Result<()> {
+        let stations = self
+            .station_catalog
+            .search(&StationSearchQuery {
+                query: self.search_input.clone(),
+                filters: self.filters.clone(),
+                sort: self.sort,
+                limit: 50,
+            })
+            .with_context(|| {
+                format!(
+                    "search failed (query='{}', sort={})",
+                    self.search_input,
+                    sort_label(self.sort)
+                )
+            })?;
+
+        self.filtered = stations;
         if self.selected_index >= self.filtered.len() {
             self.selected_index = 0;
         }
-    }
-
-    fn selected_station(&self) -> Option<&Station> {
-        self.filtered.get(self.selected_index)
+        Ok(())
     }
 
     fn execute_slash(&mut self, input: &str) -> Result<()> {
@@ -199,6 +274,9 @@ impl App {
             "resume" => SlashCommand::Resume,
             "favorite" => SlashCommand::Favorite,
             "unfavorite" => SlashCommand::Unfavorite,
+            "clear-filters" => SlashCommand::ClearFilters,
+            "sort-votes" => SlashCommand::Sort(StationSort::Votes),
+            "sort-clicks" => SlashCommand::Sort(StationSort::Clicks),
             "help" => SlashCommand::Help,
             "quit" => SlashCommand::Quit,
             _ => return Err(anyhow!("unsupported palette action: {action}")),
@@ -221,6 +299,7 @@ impl App {
                 .ok_or_else(|| anyhow!("no station found for play command"))?;
 
                 self.playback.play(&station.stream_url)?;
+                self.now_playing = Some(station.clone());
                 self.status_message = format!("Playing {}", station.name);
             }
             SlashCommand::Stop => {
@@ -237,8 +316,27 @@ impl App {
             }
             SlashCommand::Search(query) => {
                 self.search_input = query;
-                self.apply_search();
+                self.refresh_stations()?;
                 self.status_message = format!("Search applied ({} results)", self.filtered.len());
+            }
+            SlashCommand::Filter(filters) => {
+                self.filters = filters;
+                self.refresh_stations()?;
+                self.status_message = format!("Filters applied ({} results)", self.filtered.len());
+            }
+            SlashCommand::ClearFilters => {
+                self.filters = StationFilters::default();
+                self.refresh_stations()?;
+                self.status_message = format!("Filters cleared ({} results)", self.filtered.len());
+            }
+            SlashCommand::Sort(sort) => {
+                self.sort = sort;
+                self.refresh_stations()?;
+                self.status_message = format!(
+                    "Sort applied: {} ({} results)",
+                    sort_label(sort),
+                    self.filtered.len()
+                );
             }
             SlashCommand::Favorite => {
                 let Some(station) = self.selected_station().cloned() else {
@@ -262,8 +360,7 @@ impl App {
                 self.running = false;
             }
             SlashCommand::Help => {
-                self.status_message =
-                    "Commands: /play /stop /pause /resume /search /fav /unfav /quit".to_string();
+                self.status_message = "Commands: /play /stop /pause /resume /search /filter /clear-filters /sort /fav /unfav /quit".to_string();
             }
         }
 
@@ -305,8 +402,24 @@ pub async fn run() -> Result<()> {
                 .join(".config/iradio/favorites.json")
         });
 
+    let api_base = env::var("IRADIO_RADIO_BROWSER_BASE")
+        .unwrap_or_else(|_| "https://de1.api.radio-browser.info".to_string());
+    let api_timeout_ms = env::var("IRADIO_RADIO_BROWSER_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(3_000);
+    let api_retries = env::var("IRADIO_RADIO_BROWSER_MAX_RETRIES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(2);
+
     let store = FavoritesStore::new(favorites_path);
-    let mut app = App::new(playback, store)?;
+    let station_catalog = Box::new(RadioBrowserCatalog::new_with_config(
+        api_base,
+        Duration::from_millis(api_timeout_ms),
+        api_retries,
+    )?);
+    let mut app = App::new_with_catalog(playback, store, station_catalog)?;
     let mut tui = Tui::new()?;
 
     if let Err(err) = tui.run(&mut app) {
@@ -353,6 +466,18 @@ fn default_palette_items() -> Vec<PaletteItem> {
             action: "unfavorite".to_string(),
         },
         PaletteItem {
+            label: "Clear filters".to_string(),
+            action: "clear-filters".to_string(),
+        },
+        PaletteItem {
+            label: "Sort by votes".to_string(),
+            action: "sort-votes".to_string(),
+        },
+        PaletteItem {
+            label: "Sort by clicks".to_string(),
+            action: "sort-clicks".to_string(),
+        },
+        PaletteItem {
             label: "Show help".to_string(),
             action: "help".to_string(),
         },
@@ -363,6 +488,15 @@ fn default_palette_items() -> Vec<PaletteItem> {
     ]
 }
 
+fn sort_label(sort: StationSort) -> &'static str {
+    match sort {
+        StationSort::Name => "name",
+        StationSort::Votes => "votes",
+        StationSort::Clicks => "clicks",
+        StationSort::Bitrate => "bitrate",
+    }
+}
+
 fn default_stations() -> Vec<Station> {
     vec![
         Station {
@@ -371,6 +505,12 @@ fn default_stations() -> Vec<Station> {
             stream_url: "http://stream.live.vc.bbcmedia.co.uk/bbc_world_service".to_string(),
             homepage: Some("https://www.bbc.co.uk/worldserviceradio".to_string()),
             tags: vec!["news".to_string(), "world".to_string()],
+            country: Some("United Kingdom".to_string()),
+            language: Some("English".to_string()),
+            codec: Some("MP3".to_string()),
+            bitrate: Some(128),
+            votes: Some(500),
+            clicks: Some(2_000),
         },
         Station {
             id: "npr".to_string(),
@@ -378,6 +518,12 @@ fn default_stations() -> Vec<Station> {
             stream_url: "https://npr-ice.streamguys1.com/live.mp3".to_string(),
             homepage: Some("https://www.npr.org".to_string()),
             tags: vec!["news".to_string(), "talk".to_string()],
+            country: Some("United States".to_string()),
+            language: Some("English".to_string()),
+            codec: Some("MP3".to_string()),
+            bitrate: Some(128),
+            votes: Some(700),
+            clicks: Some(3_000),
         },
         Station {
             id: "soma-groove".to_string(),
@@ -385,6 +531,12 @@ fn default_stations() -> Vec<Station> {
             stream_url: "https://ice2.somafm.com/groovesalad-128-mp3".to_string(),
             homepage: Some("https://somafm.com/groovesalad/".to_string()),
             tags: vec!["ambient".to_string(), "electronic".to_string()],
+            country: Some("United States".to_string()),
+            language: Some("English".to_string()),
+            codec: Some("MP3".to_string()),
+            bitrate: Some(128),
+            votes: Some(900),
+            clicks: Some(4_000),
         },
     ]
 }

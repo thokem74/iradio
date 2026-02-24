@@ -58,8 +58,11 @@ impl Tui {
             }
             (_, KeyCode::Backspace) => app.backspace_input(),
             (_, KeyCode::Up) => app.select_previous(),
+            (_, KeyCode::Char('k')) => app.select_previous(),
             (_, KeyCode::Down) => app.select_next(),
+            (_, KeyCode::Char('j')) => app.select_next(),
             (_, KeyCode::Tab) => app.toggle_focus(),
+            (_, KeyCode::Char('/')) => app.open_slash_input(),
             (_, KeyCode::Char(c)) => app.push_char(c),
             _ => {}
         }
