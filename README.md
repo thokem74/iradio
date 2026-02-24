@@ -2,21 +2,13 @@
 
 Rust TUI internet radio client using `ratatui` + `crossterm`.
 
-## MVP Features (Phase 1-7)
-- Live Radio Browser-backed station discovery (`/search`, `/filter`, `/sort`).
-- TUI station browser with query input + metadata details pane.
-- Slash commands (e.g. `/play`, `/stop`, `/search`, `/filter`, `/sort`, `/fav`, `/quit`).
-- Command palette (`Ctrl+P`) with fuzzy matching via `nucleo-matcher`.
-- Favorites persistence to JSON.
-- VLC playback control from day 1 via RC or HTTP control interfaces.
-- Error handling with `anyhow` and diagnostics with `tracing`.
-
 ## Playback Modes
 Use VLC with either remote control mode.
 
 ### VLC RC (default)
 1. Start VLC with RC enabled (example):
    `cvlc --extraintf rc --rc-host 127.0.0.1:4212`
+   `cvlc --extraintf rc --rc-host 0.0.0.0:4212`
 2. Run app with defaults or override:
    - `IRADIO_PLAYBACK_MODE=rc`
    - `IRADIO_VLC_RC_HOST=127.0.0.1`
