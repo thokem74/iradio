@@ -2,8 +2,14 @@
 
 Status: Ready for Implementation (v1.0)
 Owner: Jonas + Archie
-Last Updated: 2026-02-22
+Last Updated: 2026-02-24
 Project Slug: 2026-02-22_internet-radio-cli
+
+## Implementation Progress Notes
+- 2026-02-24 (Phase 2 polish): Radio Browser live discovery is wired into runtime search flow with query + filter params (`country`, `language`, `tag`, `codec`, `min_bitrate`) and sort (`name`, `votes`, `clicks`, `bitrate`).
+- 2026-02-24 (Phase 2 polish): Added timeout + bounded retry behavior in Radio Browser client and improved user-facing status errors for failed discovery requests.
+- 2026-02-24 (Phase 2 polish): Added Now Playing/details pane fields for station name, URL, codec, bitrate, country/language, and playback status.
+- 2026-02-24 (Phase 2 polish): Expanded parser/integration test coverage for filter/sort validation and app state transitions.
 
 ## 1) Executive Summary
 - **Product:** Internet Radio CLI app for Linux
