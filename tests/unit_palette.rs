@@ -13,7 +13,7 @@ fn fuzzy_filter_ranks_matches() {
         },
     ];
 
-    let result = fuzzy_filter(&items, "pla");
+    let result = fuzzy_filter(&items, "selected");
     assert!(!result.is_empty());
     assert_eq!(result[0].action, "play");
 }

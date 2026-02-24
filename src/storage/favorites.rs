@@ -38,7 +38,8 @@ impl FavoritesStore {
             })?;
         }
 
-        let body = serde_json::to_string_pretty(stations).context("failed to serialize favorites")?;
+        let body =
+            serde_json::to_string_pretty(stations).context("failed to serialize favorites")?;
         fs::write(&self.path, body)
             .with_context(|| format!("failed to write favorites file: {}", self.path.display()))?;
 

@@ -37,8 +37,13 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(playback: Box<dyn PlaybackController>, favorites_store: FavoritesStore) -> Result<Self> {
-        let favorites = favorites_store.load().context("load favorites on startup")?;
+    pub fn new(
+        playback: Box<dyn PlaybackController>,
+        favorites_store: FavoritesStore,
+    ) -> Result<Self> {
+        let favorites = favorites_store
+            .load()
+            .context("load favorites on startup")?;
         let stations = default_stations();
 
         Ok(Self {
@@ -276,7 +281,8 @@ pub async fn run() -> Result<()> {
     let playback_mode = env::var("IRADIO_PLAYBACK_MODE").unwrap_or_else(|_| "rc".to_string());
     let playback: Box<dyn PlaybackController> = match playback_mode.as_str() {
         "http" => {
-            let base = env::var("IRADIO_VLC_HTTP_BASE").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
+            let base = env::var("IRADIO_VLC_HTTP_BASE")
+                .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
             let pass = env::var("IRADIO_VLC_HTTP_PASSWORD").unwrap_or_default();
             Box::new(VlcHttpController::new(base, pass))
         }

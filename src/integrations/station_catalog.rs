@@ -19,9 +19,7 @@ impl RadioBrowserCatalog {
     pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<Station>> {
         let url = format!(
             "{}/json/stations/search?name={}&limit={}",
-            self.base_url,
-            query,
-            limit
+            self.base_url, query, limit
         );
 
         let response = self

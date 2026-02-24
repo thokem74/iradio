@@ -30,19 +30,28 @@ impl PlaybackController for ScriptedPlayback {
     }
 
     fn stop(&mut self) -> Result<()> {
-        self.events.lock().expect("lock events").push("stop".to_string());
+        self.events
+            .lock()
+            .expect("lock events")
+            .push("stop".to_string());
         self.state = PlaybackState::Stopped;
         Ok(())
     }
 
     fn pause(&mut self) -> Result<()> {
-        self.events.lock().expect("lock events").push("pause".to_string());
+        self.events
+            .lock()
+            .expect("lock events")
+            .push("pause".to_string());
         self.state = PlaybackState::Paused;
         Ok(())
     }
 
     fn resume(&mut self) -> Result<()> {
-        self.events.lock().expect("lock events").push("resume".to_string());
+        self.events
+            .lock()
+            .expect("lock events")
+            .push("resume".to_string());
         self.state = PlaybackState::Playing;
         Ok(())
     }
@@ -74,6 +83,14 @@ fn e2e_mock_user_flow_search_play_pause_resume_stop_quit() {
     }
 
     let calls = events.lock().expect("lock events").clone();
-    assert_eq!(calls, vec!["play:http://stream.live.vc.bbcmedia.co.uk/bbc_world_service", "pause", "resume", "stop"]);
+    assert_eq!(
+        calls,
+        vec![
+            "play:http://stream.live.vc.bbcmedia.co.uk/bbc_world_service",
+            "pause",
+            "resume",
+            "stop"
+        ]
+    );
     assert!(!app.running);
 }

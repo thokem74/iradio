@@ -1,5 +1,5 @@
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
-use nucleo_matcher::{Config, Matcher};
+use nucleo_matcher::{Config, Matcher, Utf32Str};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaletteItem {
@@ -17,7 +17,9 @@ pub fn fuzzy_filter(items: &[PaletteItem], query: &str) -> Vec<PaletteItem> {
 
     let mut scored = Vec::new();
     for item in items {
-        let score = pattern.score(item.label.as_str(), &mut matcher);
+        let mut buf = Vec::new();
+        let haystack = Utf32Str::new(item.label.as_str(), &mut buf);
+        let score = pattern.score(haystack, &mut matcher);
         if let Some(score) = score {
             scored.push((score, item.clone()));
         }

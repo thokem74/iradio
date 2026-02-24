@@ -21,7 +21,10 @@ impl MockPlayback {
 
 impl PlaybackController for MockPlayback {
     fn play(&mut self, stream_url: &str) -> Result<()> {
-        self.log.lock().expect("lock log").push(format!("play:{stream_url}"));
+        self.log
+            .lock()
+            .expect("lock log")
+            .push(format!("play:{stream_url}"));
         self.state = PlaybackState::Playing;
         Ok(())
     }
@@ -39,7 +42,10 @@ impl PlaybackController for MockPlayback {
     }
 
     fn resume(&mut self) -> Result<()> {
-        self.log.lock().expect("lock log").push("resume".to_string());
+        self.log
+            .lock()
+            .expect("lock log")
+            .push("resume".to_string());
         self.state = PlaybackState::Playing;
         Ok(())
     }

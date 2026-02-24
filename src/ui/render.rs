@@ -17,7 +17,11 @@ pub fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
         .split(frame.area());
 
     let header = Paragraph::new("iradio - /help for commands, Ctrl+P for palette")
-        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
         .block(Block::default().borders(Borders::ALL).title("Status"));
     frame.render_widget(header, chunks[0]);
 
@@ -55,7 +59,7 @@ pub fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
         .block(Block::default().borders(Borders::ALL).title(input_title));
     frame.render_widget(input, chunks[2]);
 
-    let footer = Paragraph::new(app.status_message.clone())
-        .style(Style::default().fg(Color::Yellow));
+    let footer =
+        Paragraph::new(app.status_message.clone()).style(Style::default().fg(Color::Yellow));
     frame.render_widget(footer, chunks[3]);
 }
