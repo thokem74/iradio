@@ -27,7 +27,7 @@ impl SlashCommand {
             "play" => {
                 let query = parts.collect::<Vec<_>>().join(" ");
                 if query.is_empty() {
-                    Err(anyhow!("usage: /play <station-name|url>"))
+                    Ok(Self::Play("selected".to_string()))
                 } else {
                     Ok(Self::Play(query))
                 }

@@ -3,7 +3,12 @@
 {
 	"name": "Rust",
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	"image": "mcr.microsoft.com/devcontainers/rust:2-1-trixie"
+	"image": "mcr.microsoft.com/devcontainers/rust:2-1-trixie",
+	"runArgs": ["--add-host=host.docker.internal:host-gateway"],
+	"containerEnv": {
+		"IRADIO_VLC_RC_HOST": "host.docker.internal",
+		"IRADIO_VLC_RC_PORT": "4212"
+	}
 
 	// Use 'mounts' to make the cargo cache persistent in a Docker Volume.
 	// "mounts": [

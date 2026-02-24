@@ -7,6 +7,12 @@ fn parse_play_command() {
 }
 
 #[test]
+fn parse_play_without_args_uses_selected_station() {
+    let cmd = SlashCommand::parse("/play").expect("parse /play command without args");
+    assert_eq!(cmd, SlashCommand::Play("selected".to_string()));
+}
+
+#[test]
 fn parse_search_command() {
     let cmd = SlashCommand::parse("/search news radio").expect("parse /search command");
     assert_eq!(cmd, SlashCommand::Search("news radio".to_string()));

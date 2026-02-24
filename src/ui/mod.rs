@@ -51,7 +51,11 @@ impl Tui {
                 app.toggle_palette();
             }
             (_, KeyCode::Esc) => app.close_overlays(),
-            (_, KeyCode::Enter) => app.submit_current_input()?,
+            (_, KeyCode::Enter) => {
+                if let Err(err) = app.submit_current_input() {
+                    app.status_message = format!("Error: {err}");
+                }
+            }
             (_, KeyCode::Backspace) => app.backspace_input(),
             (_, KeyCode::Up) => app.select_previous(),
             (_, KeyCode::Down) => app.select_next(),
